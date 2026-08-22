@@ -1,0 +1,11 @@
+# 抓取行為的參數。改這裡不用動程式。
+target_quarters: 24        # 每檔要維持的實際季數（五年 ROE 需要 21 個季末權益，取 24 留餘裕）
+estimate_quarters: 1       # 往前放幾季預估（目前只放當季）
+report_lag_days: 1         # 財報日過幾天才去抓（給資料源一點時間更新）
+restatement_window: 8      # 最近幾季允許被覆寫；更舊的鎖定不再重抓
+price_history_years: 6     # 季末股價要回溯幾年
+sources:                   # 瀑布順序，可以增刪
+  - yf
+  - yq
+  - av
+  - sec

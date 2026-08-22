@@ -1,0 +1,54 @@
+name: update-stock-data
+
+on:
+  schedule:
+    # UTC 23:00 = 台灣早上 07:00（美股收盤後約 2 小時），週一到週五
+    - cron: '0 23 * * 1-5'
+  workflow_dispatch:          # 讓你隨時能到 Actions 頁面按一下立刻跑
+    inputs:
+      only:
+        description: '只跑這幾檔（逗號分隔，留空＝全部）'
+        required: false
+      force_full:
+        description: '忽略快取全部重抓（true / false）'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write             # 讓 workflow 能把資料 commit 回來
+
+concurrency:                  # 同時只跑一個，避免兩次執行互相覆蓋
+  group: stock-data
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Sync
+        env:
+          AV_API_KEY: ${{ secrets.AV_API_KEY }}          # 沒設也能跑，只是少一層備援
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}  # SEC 要求帶聯絡信箱
+        run: |
+          ARGS=""
+          [ -n "${{ inputs.only }}" ] && ARGS="$ARGS --only ${{ inputs.only }}"
+          [ "${{ inputs.force_full }}" = "true" ] && ARGS="$ARGS --force-full"
+          python sync.py $ARGS
+
+      - name: Commit
+        run: |
+          git config user.name  "stock-tracker-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add data/
+          git diff --staged --quiet || git commit -m "data: $(date -u +%F)"
+          git push
