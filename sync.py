@@ -21,7 +21,8 @@ import sources
 
 ROOT = Path(__file__).parent
 DATA = ROOT / "data"
-MASTER = DATA / "master.parquet"
+MASTER = DATA / "master.csv"          # 用 CSV 不用 parquet：git 可以 diff，
+                                      # 財報被重編時 git log 直接告訴你哪天變的
 
 RAW_Q_COLS = ["ticker", "period", "fy", "fq", "period_end", "is_est", "est_source",
               "eps_basis", "revenue", "gross_profit", "eps_diluted_adj",
@@ -69,9 +70,11 @@ def waterfall_fin(ticker, n, chain):
         if out.empty:
             out = df.copy()
         else:
-            out = out.set_index("period_end")
-            df = df.set_index("period_end")
+            out = out.drop_duplicates(subset=["period_end"]).set_index("period_end")
+            df = df.drop_duplicates(subset=["period_end"]).set_index("period_end")
             out = out.combine_first(df).reset_index()
+            for c in ("fy", "fq"):
+                out[c] = pd.to_numeric(out[c], errors="coerce")
         # 每個數值欄都補滿了就不用再往下找
         if out[["revenue", "gross_profit", "shares_diluted",
                 "total_equity"]].notna().all().all() and len(out) >= n:
@@ -101,6 +104,19 @@ def waterfall_eps(ticker, n, chain):
     return sources.empty(sources.EPS_COLS), "street", None
 
 
+def is_blank(v):
+    """型別安全的「空」判斷。
+    不能寫成 `v != {}` 或 `if v:` —— pandas 的 Series / DataFrame 會做逐元素比較，
+    再丟給 and / if 就會拋 'truth value of a Series is ambiguous'。"""
+    if v is None:
+        return True
+    if isinstance(v, (pd.Series, pd.DataFrame, pd.Index)):
+        return len(v) == 0
+    if isinstance(v, (dict, list, tuple, set, str)):
+        return len(v) == 0
+    return False
+
+
 def first_of(chain, fname, *args):
     for src in chain:
         if getattr(src, "needs_key", False) and not os.getenv("AV_API_KEY"):
@@ -110,9 +126,10 @@ def first_of(chain, fname, *args):
             continue
         try:
             v = fn(*args)
-        except Exception:
+        except Exception as e:
+            log(f"      ! {src.name}.{fname} 失敗: {e}")
             continue
-        if v is not None and not (hasattr(v, "empty") and v.empty) and v != {}:
+        if not is_blank(v):
             return v, src.name
     return None, None
 
@@ -146,7 +163,9 @@ def nearest_price(prices, when):
 
 
 def build_rows(ticker, fin, eps, basis, divs, prices, cfg):
-    fin = fin.dropna(subset=["period_end"]).sort_values("period_end", ascending=False)
+    # combine_first 合併不同來源後，缺漏的期別會讓 fy / fq 變 NaN，int() 會炸。
+    fin = fin.dropna(subset=["period_end", "fy", "fq"])
+    fin = fin.sort_values("period_end", ascending=False)
     fin = fin.head(cfg["target_quarters"]).copy()
     epsmap = {}
     if eps is not None and not eps.empty:
@@ -185,7 +204,10 @@ def estimate_row(ticker, actual_rows, est, basis):
     """當季（尚未公布）的預估列 —— seq 會在 Excel 端算成 0。"""
     if actual_rows.empty or not est.get("eps_q0"):
         return sources.empty(RAW_Q_COLS)
-    last = actual_rows.sort_values("period_end", ascending=False).iloc[0]
+    ok = actual_rows.dropna(subset=["fy", "fq"])
+    if ok.empty:
+        return sources.empty(RAW_Q_COLS)
+    last = ok.sort_values("period_end", ascending=False).iloc[0]
     fy, fq = int(last.fy), int(last.fq) + 1
     if fq > 4:
         fy, fq = fy + 1, 1
@@ -212,9 +234,12 @@ def validate(df, cfg):
                     f"{bad[['ticker','period']].head(5).to_dict('records')}")
     for tk, g in a.groupby("ticker"):
         g = g.sort_values("period_end")
-        gaps = (g.fy * 4 + g.fq).diff().dropna()
-        if len(gaps) and (gaps != 1).any():
-            errs.append(f"{tk} 季度不連續（有缺口）")
+        d = (g.fy * 4 + g.fq).diff().dropna()
+        if (d == 0).any():
+            errs.append(f"{tk} 有兩筆對到同一個財季（期別換算可能出錯）")
+        big = d[d > 1]
+        if len(big):
+            errs.append(f"{tk} 季度有缺口，跳過了 {int(big.sum() - len(big))} 季")
     n_gaap = (df.eps_basis == "gaap").sum()
     warn = [f"{n_gaap} 筆 EPS 降級為 GAAP 口徑"] if n_gaap else []
     return errs, warn
@@ -239,10 +264,16 @@ def main():
         keep = {s.strip().upper() for s in args.only.split(",")}
         tickers = tickers[tickers.ticker.str.upper().isin(keep)]
 
-    master = pd.read_parquet(MASTER) if MASTER.exists() and not args.force_full \
-        else pd.DataFrame(columns=RAW_Q_COLS)
-    meta_path = DATA / "meta.parquet"
-    meta_df = pd.read_parquet(meta_path) if meta_path.exists() else pd.DataFrame()
+    if MASTER.exists() and not args.force_full:
+        master = pd.read_csv(MASTER, parse_dates=["period_end"])
+        master["period_end"] = master["period_end"].dt.date
+    else:
+        master = pd.DataFrame(columns=RAW_Q_COLS)
+    meta_path = DATA / "meta.csv"
+    meta_df = pd.read_csv(meta_path, parse_dates=["next_earnings"]) if meta_path.exists() \
+        else pd.DataFrame()
+    if len(meta_df):
+        meta_df["next_earnings"] = meta_df["next_earnings"].dt.date
     meta = {r.ticker: dict(next_earnings=r.next_earnings)
             for r in meta_df.itertuples()} if len(meta_df) else {}
 
@@ -302,8 +333,8 @@ def main():
             log(f"    - {e}")
         return 1
 
-    master.to_parquet(MASTER, index=False)
-    pd.DataFrame(meta_rows).to_parquet(meta_path, index=False)
+    master.to_csv(MASTER, index=False)
+    pd.DataFrame(meta_rows).to_csv(meta_path, index=False)
     master.to_csv(DATA / "raw_q.csv", index=False)
     pd.DataFrame(est_rows).to_csv(DATA / "raw_est.csv", index=False)
     pd.DataFrame(price_rows).to_csv(DATA / "raw_price.csv", index=False)

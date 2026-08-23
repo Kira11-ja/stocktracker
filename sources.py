@@ -12,6 +12,7 @@
   B. 財年換算：原本用 period_end.year，一月結帳的公司（NVDA）會整個錯開一年。
      這裡用 fiscal_from_period_end() 依財年結束月份換算。
 """
+import calendar
 import os
 import re
 import time
@@ -51,16 +52,23 @@ def symbol_candidates(raw):
 def fiscal_from_period_end(period_end, fy_end_month):
     """由期末日與財年結束月份推出 (fy, fq)。
 
-    NVDA 一月結帳：期末 2026-01-25 → FY2026Q4；2026-04-26 → FY2027Q1。
-    AAPL 九月結帳：期末 2025-12-27 → FY2026Q1。
+    不能只看月份 —— 美股普遍採 52/53 週制，期末日會在月底前後飄好幾天：
+        AAPL FY2023：2022-12-31(Q1) / 2023-04-01(Q2) / 2023-07-01(Q3) / 2023-09-30(Q4)
+    純月份判斷會把 04-01 當成跨過了 3 月而算成 Q3。
+
+    作法：以「該曆年的財年結束日」為基準，用天數換算成帶小數的月份差，
+    四捨五入到最近的整數月再除以 3，就能吸收這幾天的偏移。
     """
-    y, m = period_end.year, period_end.month
-    delta = (fy_end_month - m) % 12
-    fq = 4 - (delta // 3)
-    fq = 4 if fq == 0 else fq
-    fy = y + 1 if m > fy_end_month else y
-    if fy_end_month <= 3 and m > fy_end_month:
-        fy = y + 1
+    y = period_end.year
+    ref_day = calendar.monthrange(y, fy_end_month)[1]
+    ref = dt.date(y, fy_end_month, ref_day)
+    months = ((period_end.year - ref.year) * 12
+              + (period_end.month - ref.month)
+              + (period_end.day - ref.day) / 30.44)
+    n = int(round(round(months) / 3.0))      # 距該財年 Q4 幾個季
+    idx = y * 4 + 4 + n                      # 全域季序：FY y 的 Q4 = y*4+4
+    fq = ((idx - 1) % 4) + 1
+    fy = (idx - fq) // 4
     return int(fy), int(fq)
 
 

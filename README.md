@@ -14,7 +14,7 @@
 | `sync.py` | 增量邏輯 + 驗證 + 輸出 |
 | `sources.py` | 四層資料來源瀑布 |
 | `.github/workflows/update.yml` | 排程（每個交易日台灣時間 07:00） |
-| `data/` | 程式自動建立，放 master 與輸出的 csv |
+| `data/` | 程式自動建立。`master.csv` 是累積的資料庫（用 CSV 不用 parquet，git 才能 diff） |
 
 ## 第一次設定
 
