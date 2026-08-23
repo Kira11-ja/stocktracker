@@ -4,7 +4,7 @@ on:
   schedule:
     # UTC 23:00 = 台灣早上 07:00（美股收盤後約 2 小時），週一到週五
     - cron: '0 23 * * 1-5'
-  workflow_dispatch:          # 讓你隨時能到 Actions 頁面按一下立刻跑
+  workflow_dispatch:
     inputs:
       only:
         description: '只跑這幾檔（逗號分隔，留空＝全部）'
@@ -15,9 +15,9 @@ on:
         default: 'false'
 
 permissions:
-  contents: write             # 讓 workflow 能把資料 commit 回來
+  contents: write
 
-concurrency:                  # 同時只跑一個，避免兩次執行互相覆蓋
+concurrency:
   group: stock-data
   cancel-in-progress: false
 
@@ -47,7 +47,6 @@ jobs:
           if [ "$FORCE_FULL" = "true" ]; then ARGS="$ARGS --force-full"; fi
           echo "執行：python sync.py $ARGS"
           python sync.py $ARGS
-
 
       - name: Commit
         run: |
