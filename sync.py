@@ -1,15 +1,5 @@
 #!/usr/bin/env python3
-"""增量同步：只抓缺的，抓完驗證，驗證過才寫回 master。
-
-三種情況（對應 _Manifest 分頁的「狀態」欄）：
-  1. 新標的            → 抓滿 target_quarters 季 + 季末股價 + 預估
-  2. 有資料但季數不足   → 只補缺的那幾季
-  3. 已滿季且財報未到   → 季度 API 整個跳過，只更新股價
-  4. 財報公布了        → 抓最新 1~2 季，把預估列翻成實際，並新增下一季預估列
-
-「第一次全部補齊」與「之後只補缺的」是同一段程式碼 —— 前者只是「缺口 = 全部」
-的特例。不寫成兩套，就不會有「第一次跑對了、增量跑錯了」這種難抓的 bug。
-"""
+"""增量同步：只抓缺的，抓完驗證，驗證過才寫回 master。"""
 import os, sys, argparse, datetime as dt
 from pathlib import Path
 
@@ -21,19 +11,16 @@ import sources
 
 ROOT = Path(__file__).parent
 DATA = ROOT / "data"
-MASTER = DATA / "master.csv"          # 用 CSV 不用 parquet：git 可以 diff，
-                                      # 財報被重編時 git log 直接告訴你哪天變的
+MASTER = DATA / "master.csv"
 
 RAW_Q_COLS = ["ticker", "period", "fy", "fq", "period_end", "is_est", "est_source",
               "eps_basis", "revenue", "gross_profit", "eps_diluted_adj",
               "shares_diluted", "total_equity", "dps", "price_at_end"]
-
 OUT_COLS = RAW_Q_COLS + ["seq", "key"]
 
 
 def add_seq(df):
-    """seq：is_est="Y" 記為 0（當季預估）；實際季由新到舊排 1、2、3…
-    key：ticker|seq，給 Excel 端做文字型 INDEX/MATCH。"""
+    """seq：is_est="Y" 記為 0（當季預估）；實際季由新到舊排 1、2、3…"""
     if df.empty:
         out = df.copy()
         out["seq"] = []
@@ -54,7 +41,6 @@ def log(msg):
     print(msg, flush=True)
 
 
-# ───────────────────────── 缺口判斷 ─────────────────────────
 def plan(ticker, master, meta, cfg, today):
     have = master[master.ticker == ticker] if len(master) else master
     actual = have[have.is_est == "N"] if len(have) else have
@@ -72,7 +58,6 @@ def plan(ticker, master, meta, cfg, today):
                 why="財報可能已公布，抓最近幾季")
 
 
-# ───────────────────────── 瀑布抓取 ─────────────────────────
 def waterfall_fin(ticker, n, chain):
     """依序嘗試各來源，後面的只填前面缺的期別（不覆寫已有值）。"""
     out = sources.empty(sources.FIN_COLS)
@@ -91,12 +76,14 @@ def waterfall_fin(ticker, n, chain):
         if out.empty:
             out = df.copy()
         else:
-            out = out.drop_duplicates(subset=["period_end"]).set_index("period_end")
-            df = df.drop_duplicates(subset=["period_end"]).set_index("period_end")
-            out = out.combine_first(df).reset_index()
-            for c in ("fy", "fq"):
-                out[c] = pd.to_numeric(out[c], errors="coerce")
-        # 每個數值欄都補滿了就不用再往下找
+            # 用 (fy, fq) 當鍵，不能用 period_end ——
+            # 不同來源給同一季的期末日會差好幾天（yfinance 給月底、SEC 給實際日），
+            # 用日期當鍵會讓同一季被當成兩季，歷史永遠補不滿。
+            out = out.dropna(subset=["fy", "fq"]).drop_duplicates(subset=["fy", "fq"])
+            df = df.dropna(subset=["fy", "fq"]).drop_duplicates(subset=["fy", "fq"])
+            out = (out.set_index(["fy", "fq"])
+                   .combine_first(df.set_index(["fy", "fq"]))
+                   .reset_index())
         if out[["revenue", "gross_profit", "shares_diluted",
                 "total_equity"]].notna().all().all() and len(out) >= n:
             break
@@ -120,15 +107,13 @@ def waterfall_eps(ticker, n, chain):
         except Exception:
             df = None
         if df is not None and not df.empty:
-            log(f"      ⚠ {ticker} 取不到街頭口徑 EPS，降級為 GAAP（已標記 eps_basis=gaap）")
+            log(f"      ⚠ {ticker} 取不到街頭口徑 EPS，降級為 GAAP")
             return df, "gaap", src.name
     return sources.empty(sources.EPS_COLS), "street", None
 
 
 def is_blank(v):
-    """型別安全的「空」判斷。
-    不能寫成 `v != {}` 或 `if v:` —— pandas 的 Series / DataFrame 會做逐元素比較，
-    再丟給 and / if 就會拋 'truth value of a Series is ambiguous'。"""
+    """型別安全的「空」判斷。pandas 物件不能直接丟給 and / if。"""
     if v is None:
         return True
     if isinstance(v, (pd.Series, pd.DataFrame, pd.Index)):
@@ -156,7 +141,6 @@ def first_of(chain, fname, *args):
 
 
 def merged_estimates(chain, ticker):
-    """預估要跨來源合併（yq 有 0q 與家數、yf 只有 forwardEps 保底）。"""
     out = {}
     for src in chain:
         if getattr(src, "needs_key", False) and not os.getenv("AV_API_KEY"):
@@ -172,7 +156,6 @@ def merged_estimates(chain, ticker):
     return out
 
 
-# ───────────────────────── 組成 Raw_Q 列 ─────────────────────────
 def nearest_price(prices, when):
     if prices is None or len(prices) == 0:
         return np.nan
@@ -183,24 +166,44 @@ def nearest_price(prices, when):
     return float(prices.iloc[ok.index[-1]])
 
 
+def align_eps(eps_df, ends):
+    """把 EPS 對到財季 —— 來源的 index 有兩種語意，必須分開處理：
+
+      A. 期末日型（yahooquery earnings_history / AV EARNINGS 的 fiscalDateEnding）
+         → 直接對期末日，容許 52/53 週制的幾天偏移。
+      B. 公布日型（yfinance earnings_dates）→ index 是「財報公布日」，
+         通常比期末日晚 20~40 天。用 ±12 天比對會全部落空。
+         正確作法：把每筆公布值指派給「公布日之前最近的那個期末日」。
+    """
+    if eps_df is None or eps_df.empty:
+        return {}
+    asc = sorted(ends)
+    out = {}
+    for _, r in eps_df.iterrows():
+        d, v = r["period_end"], r["eps"]
+        if pd.isna(v) or d is None:
+            continue
+        near = [pe for pe in asc if abs((d - pe).days) <= 12]
+        if near:                                   # A. 期末日型
+            pe = min(near, key=lambda p: abs((d - p).days))
+        else:                                      # B. 公布日型
+            prior = [pe for pe in asc if 5 <= (d - pe).days <= 120]
+            if not prior:
+                continue
+            pe = max(prior)
+        gap = abs((d - pe).days)
+        if pe not in out or gap < out[pe][1]:
+            out[pe] = (float(v), gap)
+    return {k: v[0] for k, v in out.items()}
+
+
 def build_rows(ticker, fin, eps, basis, divs, prices, cfg):
-    # combine_first 合併不同來源後，缺漏的期別會讓 fy / fq 變 NaN，int() 會炸。
     fin = fin.dropna(subset=["period_end", "fy", "fq"])
     fin = fin.sort_values("period_end", ascending=False)
     fin = fin.head(cfg["target_quarters"]).copy()
-    epsmap = {}
-    if eps is not None and not eps.empty:
-        # EPS 的期末日可能與財報表差幾天，用最接近的一季對齊
-        for _, r in eps.iterrows():
-            epsmap[r["period_end"]] = float(r["eps"])
-
-    def eps_for(pe):
-        if pe in epsmap:
-            return epsmap[pe]
-        cand = [d for d in epsmap if abs((d - pe).days) <= 12]
-        return epsmap[min(cand, key=lambda d: abs((d - pe).days))] if cand else np.nan
-
     ends = sorted(fin["period_end"].tolist(), reverse=True)
+    epsmap = align_eps(eps, ends)
+
     rows = []
     for _, r in fin.iterrows():
         pe = r["period_end"]
@@ -215,14 +218,14 @@ def build_rows(ticker, fin, eps, basis, divs, prices, cfg):
             fy=int(r.fy), fq=int(r.fq), period_end=pe,
             is_est="N", est_source="actual", eps_basis=basis,
             revenue=r.revenue, gross_profit=r.gross_profit,
-            eps_diluted_adj=eps_for(pe), shares_diluted=r.shares_diluted,
+            eps_diluted_adj=epsmap.get(pe, np.nan),
+            shares_diluted=r.shares_diluted,
             total_equity=r.total_equity, dps=dps,
             price_at_end=nearest_price(prices, pe)))
     return pd.DataFrame(rows, columns=RAW_Q_COLS)
 
 
 def estimate_row(ticker, actual_rows, est, basis):
-    """當季（尚未公布）的預估列 —— seq 會在 Excel 端算成 0。"""
     if actual_rows.empty or not est.get("eps_q0"):
         return sources.empty(RAW_Q_COLS)
     ok = actual_rows.dropna(subset=["fy", "fq"])
@@ -242,7 +245,6 @@ def estimate_row(ticker, actual_rows, est, basis):
         columns=RAW_Q_COLS)
 
 
-# ───────────────────────── 驗證 ─────────────────────────
 def validate(df, cfg):
     errs = []
     a = df[df.is_est == "N"]
@@ -257,19 +259,23 @@ def validate(df, cfg):
         g = g.sort_values("period_end")
         d = (g.fy * 4 + g.fq).diff().dropna()
         if (d == 0).any():
-            errs.append(f"{tk} 有兩筆對到同一個財季（期別換算可能出錯）")
+            errs.append(f"{tk} 有兩筆對到同一個財季")
         big = d[d > 1]
         if len(big):
             errs.append(f"{tk} 季度有缺口，跳過了 {int(big.sum() - len(big))} 季")
+    warn = []
     n_gaap = (df.eps_basis == "gaap").sum()
-    warn = [f"{n_gaap} 筆 EPS 降級為 GAAP 口徑"] if n_gaap else []
+    if n_gaap:
+        warn.append(f"{n_gaap} 筆 EPS 降級為 GAAP 口徑")
+    n_miss = int(a.eps_diluted_adj.isna().sum())
+    if n_miss:
+        warn.append(f"{n_miss}/{len(a)} 季沒有對到 EPS")
     return errs, warn
 
 
-# ───────────────────────── 主流程 ─────────────────────────
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--only", help="只跑指定代號（逗號分隔），用於除錯")
+    ap.add_argument("--only", help="只跑指定代號（逗號分隔）")
     ap.add_argument("--force-full", action="store_true", help="忽略快取，全部重抓")
     ap.add_argument("--dry-run", action="store_true", help="不寫檔，只印出計畫")
     args = ap.parse_args()
@@ -327,12 +333,15 @@ def main():
             log(f"      ! {tk} 完全抓不到季度財報，跳過")
             continue
         eps, basis, esrc = waterfall_eps(tk, p["quarters"], chain)
-        divs, _ = first_of(chain, "dividends", tk, None)
+        divs, dsrc = first_of(chain, "dividends", tk, None)
         rows = build_rows(tk, fin, eps, basis, divs, prices, cfg)
+        n_eps = int(rows.eps_diluted_adj.notna().sum())
+        n_div = 0 if divs is None else len(divs)
+        log(f"      財報={'+'.join(used)} {len(rows)} 季 ｜ EPS={esrc}({basis}) "
+            f"對上 {n_eps}/{len(rows)} ｜ 股利 {n_div} 筆（{dsrc or '無'}）")
         rows = pd.concat([rows, estimate_row(tk, rows, est, basis)], ignore_index=True)
         all_new.append(rows)
         calls += len(used) + 2
-        log(f"      財報={'+'.join(used)}  EPS={esrc}({basis})  {len(rows)} 列")
 
     if args.dry_run:
         log("\n(dry-run，未寫檔)")
@@ -340,9 +349,8 @@ def main():
 
     if all_new:
         new = pd.concat(all_new, ignore_index=True)
-        keys = ["ticker", "fy", "fq"]
         master = (pd.concat([new, master], ignore_index=True)
-                  .drop_duplicates(subset=keys, keep="first"))   # 新的覆蓋舊的
+                  .drop_duplicates(subset=["ticker", "fy", "fq"], keep="first"))
     master = master.sort_values(["ticker", "period_end"], ascending=[True, False])
 
     errs, warn = validate(master, cfg)
@@ -360,7 +368,7 @@ def main():
     pd.DataFrame(est_rows).to_csv(DATA / "raw_est.csv", index=False)
     pd.DataFrame(price_rows).to_csv(DATA / "raw_price.csv", index=False)
     tickers.to_csv(DATA / "tickers.csv", index=False)
-    log(f"\n✓ 完成：{master.ticker.nunique()} 檔 / {len(master)} 列 / 約 {calls} 次 API 呼叫")
+    log(f"\n✓ 完成：{master.ticker.nunique()} 檔 / {len(master)} 列 / 約 {calls} 次呼叫")
     return 0
 
 
