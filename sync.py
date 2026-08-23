@@ -28,6 +28,27 @@ RAW_Q_COLS = ["ticker", "period", "fy", "fq", "period_end", "is_est", "est_sourc
               "eps_basis", "revenue", "gross_profit", "eps_diluted_adj",
               "shares_diluted", "total_equity", "dps", "price_at_end"]
 
+OUT_COLS = RAW_Q_COLS + ["seq", "key"]
+
+
+def add_seq(df):
+    """seq：is_est="Y" 記為 0（當季預估）；實際季由新到舊排 1、2、3…
+    key：ticker|seq，給 Excel 端做文字型 INDEX/MATCH。"""
+    if df.empty:
+        out = df.copy()
+        out["seq"] = []
+        out["key"] = []
+        return out[OUT_COLS]
+    df = df.copy()
+    actual = df.is_est == "N"
+    df["seq"] = 0
+    df.loc[actual, "seq"] = (df[actual]
+                             .groupby("ticker")["period_end"]
+                             .rank(ascending=False, method="first")
+                             .astype(int))
+    df["key"] = df.ticker.astype(str) + "|" + df.seq.astype(str)
+    return df[OUT_COLS]
+
 
 def log(msg):
     print(msg, flush=True)
@@ -335,7 +356,7 @@ def main():
 
     master.to_csv(MASTER, index=False)
     pd.DataFrame(meta_rows).to_csv(meta_path, index=False)
-    master.to_csv(DATA / "raw_q.csv", index=False)
+    add_seq(master).to_csv(DATA / "raw_q.csv", index=False)
     pd.DataFrame(est_rows).to_csv(DATA / "raw_est.csv", index=False)
     pd.DataFrame(price_rows).to_csv(DATA / "raw_price.csv", index=False)
     tickers.to_csv(DATA / "tickers.csv", index=False)
