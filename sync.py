@@ -90,17 +90,39 @@ def waterfall_fin(ticker, n, chain):
     return out, used
 
 
+def _merge_eps(a, b):
+    if a.empty:
+        return b.copy()
+    a = a.drop_duplicates(subset=["period_end"]).set_index("period_end")
+    b = b.drop_duplicates(subset=["period_end"]).set_index("period_end")
+    return a.combine_first(b).reset_index()
+
+
 def waterfall_eps(ticker, n, chain):
-    """街頭口徑優先；全部失敗才退回 GAAP，並回傳 basis 讓上層標記。"""
+    """街頭口徑優先，而且**跨來源互補** —— 不是拿到第一個非空就停。
+
+    MSFT 的 yfinance earnings_dates 會回空表；若停在第一層，整檔 EPS 就會全空
+    （yahooquery / AV 其實有資料）。這裡沿用財報那邊「只補缺的」同一套邏輯。
+    不同來源的 index 語意不同（公布日 vs 期末日）沒關係，align_eps 會各自處理。
+    """
+    got, used = sources.empty(sources.EPS_COLS), []
     for src in chain:
         if getattr(src, "needs_key", False) and not os.getenv("AV_API_KEY"):
             continue
         try:
             df = src.quarterly_eps_street(ticker, n)
-        except Exception:
-            df = None
-        if df is not None and not df.empty:
-            return df, "street", src.name
+        except Exception as e:
+            log(f"      ! {src.name} 街頭 EPS 失敗: {e}")
+            continue
+        if df is None or df.empty:
+            continue
+        used.append(src.name)
+        got = _merge_eps(got, df)
+        if len(got) >= n:
+            break
+    if not got.empty:
+        return got, "street", "+".join(used)
+
     for src in chain:
         try:
             df = src.quarterly_eps_gaap(ticker, n)
@@ -196,6 +218,42 @@ def align_eps(eps_df, ends):
             out[pe] = (float(v), gap)
     return {k: v[0] for k, v in out.items()}
 
+SPLIT_FACTORS = (2, 3, 4, 5, 6, 8, 10, 15, 20)
+
+
+def fix_split_shares(rows):
+    """修正股數的分割斷層。
+
+    yfinance 的損益表對分割前的季度不一定回溯調整，同一檔會出現 2.5B 與 24.9B
+    並存（NVDA 2024/6 的 10:1）。但 EPS 是調整後的口徑，兩者相乘反推淨利會差十倍，
+    ROE 直接爆掉。
+
+    以最新一季為基準，凡是倍率落在常見分割比例 ±4% 內的值就換算回同一基準。
+    正常的回購／增發漂移（六年頂多 ±20%）不會誤觸。
+    """
+    if rows.empty or rows.shares_diluted.notna().sum() == 0:
+        return rows
+    ref = rows.shares_diluted.dropna().iloc[0]     # rows 已由新到舊排序
+    out, n_fix = rows.shares_diluted.copy(), 0
+    for i2, v in rows.shares_diluted.items():
+        if pd.isna(v) or v <= 0:
+            continue
+        r = ref / v
+        for f in SPLIT_FACTORS:
+            if abs(r - f) / f < 0.04:
+                out[i2] = v * f
+                n_fix += 1
+                break
+            if abs(r - 1.0 / f) * f < 0.04:
+                out[i2] = v / f
+                n_fix += 1
+                break
+    if n_fix:
+        rows = rows.copy()
+        rows["shares_diluted"] = out
+        log(f"      ⚙ 修正 {n_fix} 季的股數分割斷層（換算到最新一季的基準）")
+    return rows
+
 
 def build_rows(ticker, fin, eps, basis, divs, prices, cfg):
     fin = fin.dropna(subset=["period_end", "fy", "fq"])
@@ -222,7 +280,7 @@ def build_rows(ticker, fin, eps, basis, divs, prices, cfg):
             shares_diluted=r.shares_diluted,
             total_equity=r.total_equity, dps=dps,
             price_at_end=nearest_price(prices, pe)))
-    return pd.DataFrame(rows, columns=RAW_Q_COLS)
+    return fix_split_shares(pd.DataFrame(rows, columns=RAW_Q_COLS))
 
 
 def estimate_row(ticker, actual_rows, est, basis):
