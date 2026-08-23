@@ -37,13 +37,17 @@ jobs:
 
       - name: Sync
         env:
-          AV_API_KEY: ${{ secrets.AV_API_KEY }}          # 沒設也能跑，只是少一層備援
-          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}  # SEC 要求帶聯絡信箱
+          AV_API_KEY: ${{ secrets.AV_API_KEY }}
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+          ONLY: ${{ inputs.only }}
+          FORCE_FULL: ${{ inputs.force_full }}
         run: |
           ARGS=""
-          [ -n "${{ inputs.only }}" ] && ARGS="$ARGS --only ${{ inputs.only }}"
-          [ "${{ inputs.force_full }}" = "true" ] && ARGS="$ARGS --force-full"
+          if [ -n "$ONLY" ]; then ARGS="$ARGS --only $ONLY"; fi
+          if [ "$FORCE_FULL" = "true" ]; then ARGS="$ARGS --force-full"; fi
+          echo "執行：python sync.py $ARGS"
           python sync.py $ARGS
+
 
       - name: Commit
         run: |
