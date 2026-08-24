@@ -162,8 +162,17 @@ def first_of(chain, fname, *args):
     return None, None
 
 
+AMBIGUOUS_EST = {"yf"}   # yf 的 forwardEps 沒標明是哪個財年，只能當保底
+
+
 def merged_estimates(chain, ticker):
-    out = {}
+    """有標明期別的來源（yq / av）先填，yf 只補缺口。
+
+    yf 的 info["forwardEps"] 常常是「下一個財年」而不是本財年。
+    原本的寫法讓它先佔走 eps_f1，結果 eps_f1 == eps_f2（兩個都是下一年），
+    EPS成長_F ≈ 0 → 低於 PEG 門檻 → PEG_F 全部變 N/M。
+    """
+    labeled, fallback = {}, {}
     for src in chain:
         if getattr(src, "needs_key", False) and not os.getenv("AV_API_KEY"):
             continue
@@ -171,12 +180,25 @@ def merged_estimates(chain, ticker):
         if not fn:
             continue
         try:
-            for k, v in (fn(ticker) or {}).items():
-                out.setdefault(k, v)
+            got = fn(ticker) or {}
         except Exception:
             continue
-    return out
+        target = fallback if src.name in AMBIGUOUS_EST else labeled
+        for k, v in got.items():
+            if v is not None:
+                target.setdefault(k, v)
 
+    out = dict(labeled)
+    for k, v in fallback.items():
+        out.setdefault(k, v)
+
+    # 只有一邊有值時互補，讓 PE Forward 還算得出來；
+    # 此時 f1 == f2 → 成長率 0 → PEG_F 誠實顯示 N/M。
+    if out.get("eps_f1") is None and out.get("eps_f2") is not None:
+        out["eps_f1"] = out["eps_f2"]
+    if out.get("eps_f2") is None and out.get("eps_f1") is not None:
+        out["eps_f2"] = out["eps_f1"]
+    return out
 
 def nearest_price(prices, when):
     if prices is None or len(prices) == 0:
