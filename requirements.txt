@@ -3,3 +3,4 @@ yfinance>=0.2.40
 yahooquery>=2.3.7
 requests>=2.31
 PyYAML>=6.0
+openpyxl>=3.1
