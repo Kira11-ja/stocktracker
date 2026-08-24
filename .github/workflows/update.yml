@@ -2,7 +2,6 @@ name: update-stock-data
 
 on:
   schedule:
-    # UTC 23:00 = 台灣早上 07:00（美股收盤後約 2 小時），週一到週五
     - cron: '0 23 * * 1-5'
   workflow_dispatch:
     inputs:
@@ -48,10 +47,13 @@ jobs:
           echo "執行：python sync.py $ARGS"
           python sync.py $ARGS
 
+      - name: Build Excel
+        run: python build_xlsx.py
+
       - name: Commit
         run: |
           git config user.name  "stock-tracker-bot"
           git config user.email "bot@users.noreply.github.com"
-          git add data/
+          git add data/ "美股觀察表.xlsx"
           git diff --staged --quiet || git commit -m "data: $(date -u +%F)"
           git push
