@@ -1,0 +1,570 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>美股觀察表</title>
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#fff; --line:#e3e6ea; --line2:#eef0f3;
+  --ink:#1a1d21; --dim:#6b7280; --faint:#9aa1ab;
+  --up:#0a7d3f; --down:#c0272d; --flat:#8a6d00;
+  --accent:#1f3864; --accent-soft:#eaf0fa;
+  --chip:#f0f2f5;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#14161a; --panel:#1b1e24; --line:#2b3038; --line2:#23272e;
+    --ink:#e8eaed; --dim:#9aa1ab; --faint:#6b7280;
+    --up:#4ade80; --down:#f87171; --flat:#fbbf24;
+    --accent:#93b4e8; --accent-soft:#1e2a3d;
+    --chip:#252932;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;}
+header{position:sticky;top:0;z-index:30;background:var(--panel);
+  border-bottom:1px solid var(--line);padding:10px 16px;
+  display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+h1{font-size:16px;margin:0;font-weight:700;letter-spacing:.02em}
+.meta{color:var(--dim);font-size:12px}
+.spacer{flex:1}
+button,select,input{font:inherit;color:inherit;background:var(--panel);
+  border:1px solid var(--line);border-radius:7px;padding:5px 10px}
+button{cursor:pointer}
+button:hover{background:var(--chip)}
+button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+@media (prefers-color-scheme:dark){button.primary{color:#0f1216}}
+main{padding:16px;max-width:100%}
+section{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  margin-bottom:16px;overflow:hidden}
+.sec-head{padding:10px 14px;border-bottom:1px solid var(--line);
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.sec-head h2{font-size:14px;margin:0;font-weight:700}
+.sec-head .note{color:var(--dim);font-size:12px}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13px;white-space:nowrap}
+th,td{padding:6px 10px;border-bottom:1px solid var(--line2);text-align:right}
+th{background:var(--panel);color:var(--dim);font-weight:600;font-size:11.5px;
+  position:sticky;top:0;z-index:2;border-bottom:1px solid var(--line)}
+th.grp{text-align:center;color:var(--accent);background:var(--accent-soft);
+  border-bottom:1px solid var(--line);top:0;z-index:3}
+th.sortable{cursor:pointer;user-select:none}
+th.sortable:hover{color:var(--ink)}
+td.l,th.l{text-align:left}
+tbody tr:hover{background:var(--chip)}
+tbody tr.sel{background:var(--accent-soft)}
+/* 總覽有 26 欄，橫向捲動時代號要釘住，不然不知道自己在看哪一檔 */
+#tbl thead tr:nth-child(2) th:first-child{position:sticky;left:0;z-index:4}
+#tbl tbody td:first-child{position:sticky;left:0;z-index:1;
+  background:var(--panel);box-shadow:1px 0 0 var(--line2)}
+#tbl thead tr:nth-child(2) th:first-child{background:var(--panel);box-shadow:1px 0 0 var(--line)}
+#tbl tbody tr:hover td:first-child{background:var(--chip)}
+#tbl tbody tr.sel td:first-child{background:var(--accent-soft)}
+#detail{scroll-margin-top:64px}
+.tk{font-weight:700;cursor:pointer}
+.up{color:var(--up)} .down{color:var(--down)} .nm{color:var(--faint)}
+.badge{display:inline-block;padding:1px 7px;border-radius:99px;font-size:11.5px;font-weight:600}
+.b-ga{background:rgba(10,125,63,.14);color:var(--up)}
+.b-gd{background:rgba(138,109,0,.16);color:var(--flat)}
+.b-sc{background:rgba(138,109,0,.16);color:var(--flat)}
+.b-sd{background:rgba(192,39,45,.14);color:var(--down)}
+.tier{font-size:11.5px;color:var(--dim)}
+.flags{color:var(--flat);font-size:11.5px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+  gap:1px;background:var(--line2)}
+.card{background:var(--panel);padding:10px 14px}
+.card .k{color:var(--dim);font-size:11.5px}
+.card .v{font-size:17px;font-weight:700;margin-top:2px}
+.card .s{color:var(--faint);font-size:11.5px;margin-top:1px}
+dialog{border:1px solid var(--line);border-radius:12px;background:var(--panel);
+  color:var(--ink);padding:0;max-width:520px;width:calc(100% - 32px)}
+dialog::backdrop{background:rgba(0,0,0,.45)}
+.dlg-body{padding:16px}
+.dlg-body h3{margin:0 0 4px;font-size:15px}
+.dlg-body p{margin:0 0 14px;color:var(--dim);font-size:12.5px}
+.row{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.row label{flex:1;font-size:13px}
+.row .hint{display:block;color:var(--faint);font-size:11.5px;font-weight:400}
+.row input,.row select{width:120px;text-align:right}
+.row input[type=text]{text-align:left;width:100%}
+.dlg-foot{display:flex;gap:8px;justify-content:flex-end;padding:12px 16px;
+  border-top:1px solid var(--line)}
+.empty{padding:40px 16px;text-align:center;color:var(--dim)}
+.err{padding:16px;color:var(--down)}
+code{background:var(--chip);padding:1px 5px;border-radius:4px;font-size:12px}
+@media (max-width:640px){
+  main{padding:10px} th,td{padding:5px 7px;font-size:12px}
+  header{padding:8px 10px}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>美股觀察表</h1>
+  <span class="meta" id="asof"></span>
+  <span class="spacer"></span>
+  <input id="q" type="search" placeholder="搜尋代號／公司" style="width:150px">
+  <select id="tier"><option value="">全部等級</option></select>
+  <button id="btn-add" class="primary">＋ 新增股票</button>
+  <button id="btn-cfg">⚙ 設定</button>
+</header>
+
+<main>
+  <section id="overview">
+    <div class="sec-head">
+      <h2>總覽</h2>
+      <span class="note">點代號看個股細節。點欄位標題可排序。</span>
+      <span class="spacer"></span>
+      <span class="note" id="count"></span>
+    </div>
+    <div class="scroll"><table id="tbl"><thead></thead><tbody></tbody></table></div>
+  </section>
+
+  <section id="detail" hidden></section>
+</main>
+
+<dialog id="dlg-cfg">
+  <div class="dlg-body">
+    <h3>設定</h3>
+    <p>只存在你自己的瀏覽器，改完整頁立刻重算，不會動到 GitHub 上的資料。</p>
+    <div class="row"><label>PEG 成長率下限
+      <span class="hint">成長率低於此值時 PEG 顯示 N/M（低成長時 PEG 會失真）</span></label>
+      <input id="c-peg" type="number" step="0.01" min="0" max="1"></div>
+    <div class="row"><label>毛利率平均取樣季數
+      <span class="hint">「5 年平均毛利率」用幾季算</span></label>
+      <input id="c-gm" type="number" step="1" min="4" max="40"></div>
+    <div class="row"><label>分析師家數下限
+      <span class="hint">低於此值會在該檔標記「預估信心不足」</span></label>
+      <input id="c-an" type="number" step="1" min="0" max="60"></div>
+    <div class="row"><label>加速度「持平」區間 (pp)
+      <span class="hint">加速度絕對值小於此值就當持平。0 ＝完全比照 Excel</span></label>
+      <input id="c-fl" type="number" step="0.5" min="0" max="20"></div>
+    <div class="row"><label>季度檢視顯示季數</label>
+      <input id="c-qs" type="number" step="1" min="4" max="24"></div>
+    <div class="row"><label>年度檢視顯示年數</label>
+      <input id="c-ys" type="number" step="1" min="2" max="10"></div>
+    <div class="row"><label>GitHub Repo
+      <span class="hint">新增／移除股票要用，格式 帳號/repo。留空會自動偵測</span></label></div>
+    <div class="row"><input id="c-repo" type="text" placeholder="例：kira/stock-tracker"></div>
+  </div>
+  <div class="dlg-foot">
+    <button id="cfg-reset">恢復預設</button>
+    <button id="cfg-close">關閉</button>
+  </div>
+</dialog>
+
+<dialog id="dlg-add">
+  <div class="dlg-body">
+    <h3>新增股票</h3>
+    <p>送出後會幫你在 GitHub 開一張 Issue，GitHub 收到就會自動把代號寫進
+       <code>tickers.csv</code>、抓齊歷史資料、更新這個網頁。大約 3～6 分鐘。</p>
+    <div class="row"><label>股票代號</label>
+      <input id="a-t" type="text" placeholder="NVDA" style="text-transform:uppercase"></div>
+    <div class="row"><label>等級</label>
+      <select id="a-tier"><option>核心</option><option>觀察</option><option selected>池子</option></select></div>
+    <div class="row"><label>公司名稱<span class="hint">留空會自動抓</span></label></div>
+    <div class="row"><input id="a-name" type="text" placeholder="留空即可"></div>
+    <div class="row"><label>備註</label></div>
+    <div class="row"><input id="a-note" type="text" placeholder="想追蹤的重點"></div>
+  </div>
+  <div class="dlg-foot">
+    <button id="add-close">取消</button>
+    <button id="add-go" class="primary">開 Issue 送出</button>
+  </div>
+</dialog>
+
+<script type="module">
+import { DEFAULTS, NM, isNum, indexQuarters, computeSummary, quarterTable, yearTable }
+  from './metrics.js';
+
+const $ = (s) => document.querySelector(s);
+const el = (tag, cls, txt) => { const e = document.createElement(tag);
+  if (cls) e.className = cls; if (txt !== undefined) e.textContent = txt; return e; };
+
+/* ── 設定（存瀏覽器）─────────────────────────────── */
+const CFG_KEY = 'watchlist.cfg.v1';
+let saved = null;
+try {
+  const s = localStorage.getItem(CFG_KEY);
+  if (s) saved = JSON.parse(s);
+} catch (e) { /* 無痕視窗或封鎖儲存 —— 用預設值就好 */ }
+let cfg = { ...DEFAULTS, repo: '', ...(saved || {}) };
+function saveCfg() {
+  saved = { ...cfg };
+  try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); } catch (e) {}
+}
+
+/* ── GitHub repo 自動偵測（帳號.github.io/repo）──── */
+function repoSlug() {
+  if (cfg.repo && cfg.repo.includes('/')) return cfg.repo.trim();
+  const m = location.hostname.match(/^([^.]+)\.github\.io$/);
+  if (!m) return null;
+  const seg = location.pathname.split('/').filter(Boolean);
+  return seg.length ? `${m[1]}/${seg[0]}` : `${m[1]}/${m[1]}.github.io`;
+}
+
+/* ── 格式化 ──────────────────────────────────────── */
+const fmt = {
+  pct(v, d = 1) { return isNum(v) ? (v * 100).toFixed(d) + '%' : txt(v); },
+  num(v, d = 2) { return isNum(v) ? v.toFixed(d) : txt(v); },
+  bps(v) { return isNum(v) ? (v >= 0 ? '+' : '') + v.toFixed(0) : txt(v); },
+  pp(v) { return isNum(v) ? (v >= 0 ? '+' : '') + v.toFixed(2) : txt(v); },
+  money(v) { return isNum(v) ? v.toLocaleString('en-US', { maximumFractionDigits: 0 }) : txt(v); },
+  date(v) { return v ? String(v) : '—'; },
+};
+function txt(v) { return (typeof v === 'string' && v) ? v : '—'; }
+
+function cell(value, kind) {
+  const td = el('td');
+  let s, cls = '';
+  switch (kind) {
+    case 'pct': s = fmt.pct(value); cls = signCls(value); break;
+    case 'pct2': s = fmt.pct(value, 2); cls = signCls(value); break;
+    case 'pctp': s = fmt.pct(value); break;
+    case 'bps': s = fmt.bps(value); cls = signCls(value); break;
+    case 'pp': s = fmt.pp(value); cls = signCls(value); break;
+    case 'x': s = fmt.num(value, 2); break;
+    case 'money': s = fmt.money(value); break;
+    case 'date': s = fmt.date(value); break;
+    default: s = isNum(value) ? fmt.num(value, 2) : txt(value);
+  }
+  if (typeof value === 'string' && (value === NM || value === '不配息')) cls = 'nm';
+  td.textContent = s;
+  if (cls) td.className = cls;
+  return td;
+}
+const signCls = (v) => !isNum(v) ? '' : (v > 0 ? 'up' : v < 0 ? 'down' : '');
+
+const MOM_CLASS = { '成長且加速': 'b-ga', '成長但減速': 'b-gd', '成長持平': 'b-gd',
+  '衰退但收斂': 'b-sc', '衰退持平': 'b-sc', '衰退且惡化': 'b-sd' };
+function momCell(v) {
+  const td = el('td');
+  if (!v) { td.textContent = '—'; return td; }
+  const b = el('span', 'badge ' + (MOM_CLASS[v] || ''), v);
+  td.appendChild(b);
+  return td;
+}
+
+/* ── 總覽表定義 ──────────────────────────────────── */
+const GROUPS = [
+  ['基本', 3], ['估值', 4], ['殖利率', 2], ['成長', 7], ['毛利率', 4], ['ROE', 3], ['預估', 3],
+];
+const COLS = [
+  { k: 't', h: 'Ticker', kind: 'tk', l: true },
+  { k: 'name', h: '公司', kind: 'str', l: true },
+  { k: 'price', h: '股價', kind: 'x' },
+  { k: 'pe_ttm', h: 'PE_TTM', kind: 'x' },
+  { k: 'pe_ntm', h: 'PE Forward', kind: 'x' },
+  { k: 'peg_t', h: 'PEG_T', kind: 'x' },
+  { k: 'peg_f', h: 'PEG_F', kind: 'x' },
+  { k: 'yield', h: '殖利率', kind: 'pct2' },
+  { k: 'dps_yoy', h: '配息YoY', kind: 'pct' },
+  { k: 'rev_qoq', h: '營收QoQ', kind: 'pct' },
+  { k: 'rev_qoq_prev', h: '上季QoQ', kind: 'pct' },
+  { k: 'accel_pp', h: '加速度(pp)', kind: 'pp' },
+  { k: 'momentum', h: '動能判讀', kind: 'mom' },
+  { k: 'yoy_accel_pp', h: '同期加速度(pp)', kind: 'pp' },
+  { k: 'rev_yoy_q', h: '營收YoY', kind: 'pct' },
+  { k: 'eps_yoy_q', h: 'EPS_YoY', kind: 'pct' },
+  { k: 'gm_ttm', h: '毛利率', kind: 'pctp' },
+  { k: 'gm_5y', h: '5年平均', kind: 'pctp' },
+  { k: 'gm_vs_5y_bps', h: 'vs5年(bps)', kind: 'bps' },
+  { k: 'dgm_yoy_bps', h: 'ΔGM_YoY(bps)', kind: 'bps' },
+  { k: 'roe_ttm', h: 'ROE_TTM', kind: 'pctp' },
+  { k: 'roe_5y', h: 'ROE_5年平均', kind: 'pctp' },
+  { k: 'roe_fwd', h: 'ROE Forward', kind: 'pctp' },
+  { k: 'est_eps', h: '當季EPS預估', kind: 'x' },
+  { k: 'est_period', h: '預估期別', kind: 'str' },
+  { k: 'next_earnings', h: '下次財報', kind: 'date' },
+];
+
+let DATA = null, SUM = [], sortKey = 't', sortDir = 1, selected = null;
+
+function buildHead() {
+  const thead = $('#tbl thead');
+  thead.innerHTML = '';
+  const r1 = el('tr');
+  for (const [name, span] of GROUPS) {
+    const th = el('th', 'grp', name); th.colSpan = span;
+    r1.appendChild(th);
+  }
+  const r2 = el('tr');
+  for (const c of COLS) {
+    const th = el('th', 'sortable' + (c.l ? ' l' : ''), c.h);
+    th.title = '點一下排序';
+    th.onclick = () => {
+      if (sortKey === c.k) sortDir = -sortDir; else { sortKey = c.k; sortDir = 1; }
+      render();
+    };
+    if (sortKey === c.k) th.textContent = c.h + (sortDir > 0 ? ' ▲' : ' ▼');
+    r2.appendChild(th);
+  }
+  thead.appendChild(r1); thead.appendChild(r2);
+}
+
+function sortVal(row, k) {
+  const v = row[k];
+  if (isNum(v)) return v;
+  if (typeof v === 'string') return v;
+  return null;
+}
+
+function render() {
+  buildHead();
+  const term = $('#q').value.trim().toUpperCase();
+  const tier = $('#tier').value;
+  let rows = SUM.filter((r) =>
+    (!term || r.t.includes(term) || (r.name || '').toUpperCase().includes(term)) &&
+    (!tier || r.tier === tier));
+
+  rows.sort((a, b) => {
+    const x = sortVal(a, sortKey), y = sortVal(b, sortKey);
+    const xn = isNum(x), yn = isNum(y);
+    if (xn && yn) return (x - y) * sortDir;
+    if (xn) return -1 * sortDir;
+    if (yn) return 1 * sortDir;
+    return String(x ?? '').localeCompare(String(y ?? '')) * sortDir;
+  });
+
+  const tb = $('#tbl tbody');
+  tb.innerHTML = '';
+  for (const r of rows) {
+    const tr = el('tr');
+    if (r.t === selected) tr.className = 'sel';
+    for (const c of COLS) {
+      if (c.kind === 'tk') {
+        const td = el('td', 'l');
+        const a = el('span', 'tk', r.t);
+        a.onclick = () => { selected = r.t; renderDetail(r.t); render();
+          $('#detail').scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+        td.appendChild(a);
+        if (r.flags.length) {
+          const f = el('div', 'flags', '⚑ ' + r.flags.join('、'));
+          td.appendChild(f);
+        }
+        tr.appendChild(td);
+      } else if (c.kind === 'str' && c.k === 'name') {
+        const td = el('td', 'l');
+        td.appendChild(el('div', null, r.name || r.t));
+        td.appendChild(el('div', 'tier', r.tier || ''));
+        tr.appendChild(td);
+      } else if (c.kind === 'mom') {
+        tr.appendChild(momCell(r[c.k]));
+      } else {
+        tr.appendChild(cell(r[c.k], c.kind));
+      }
+    }
+    tb.appendChild(tr);
+  }
+  $('#count').textContent = `${rows.length} / ${SUM.length} 檔`;
+}
+
+/* ── 個股細節 ────────────────────────────────────── */
+function renderDetail(t) {
+  const sec = $('#detail');
+  sec.hidden = false;
+  sec.innerHTML = '';
+  const s = SUM.find((r) => r.t === t);
+  if (!s) return;
+  const rows = QIDX.get(t) || [];
+
+  const head = el('div', 'sec-head');
+  head.appendChild(el('h2', null, `${t}　${s.name || ''}`));
+  head.appendChild(el('span', 'note',
+    `${s.tier || ''}　EPS 口徑：${s.eps_basis === 'gaap' ? 'GAAP' : 'Adjusted（街頭）'}　`
+    + `資料日期 ${fmt.date(s.as_of)}　下次財報 ${fmt.date(s.next_earnings)}`));
+  head.appendChild(el('span', 'spacer'));
+  const rm = el('button', null, '移除這檔');
+  rm.onclick = () => openIssue(`remove: ${t}`, `請把 ${t} 從 tickers.csv 移除。`);
+  head.appendChild(rm);
+  sec.appendChild(head);
+
+  if (s.n_actual === 0) {
+    const n = el('div', 'empty',
+      `${t} 還沒有任何季度資料。剛新增的股票要等 GitHub 跑完一輪（約 3～6 分鐘）`
+      + '，跑完重整這頁就會出現。');
+    sec.appendChild(n);
+    return;
+  }
+
+  const cards = el('div', 'cards');
+  const card = (k, v, sub) => {
+    const c = el('div', 'card');
+    c.appendChild(el('div', 'k', k));
+    const vv = el('div', 'v', v);
+    c.appendChild(vv);
+    if (sub) c.appendChild(el('div', 's', sub));
+    return c;
+  };
+  cards.appendChild(card('股價', fmt.num(s.price, 2), `分析師 ${isNum(s.n_analysts) ? s.n_analysts : '—'} 家`));
+  cards.appendChild(card('PE_TTM', fmt.num(s.pe_ttm, 2), `EPS_TTM ${fmt.num(s.eps_ttm, 2)}`));
+  cards.appendChild(card('PE Forward', fmt.num(s.pe_ntm, 2), `EPS Fwd ${fmt.num(s.eps_ntm, 2)}`));
+  cards.appendChild(card('PEG_T / PEG_F', `${fmt.num(s.peg_t, 2)} / ${fmt.num(s.peg_f, 2)}`,
+    `EPS成長_F ${fmt.pct(s.eps_growth_f)}`));
+  cards.appendChild(card('殖利率', typeof s.yield === 'string' ? s.yield : fmt.pct(s.yield, 2),
+    `每股配息 TTM ${fmt.num(s.dps_ttm, 2)}`));
+  cards.appendChild(card('營收QoQ', fmt.pct(s.rev_qoq), `加速度 ${fmt.pp(s.accel_pp)} pp・${s.momentum || '—'}`));
+  cards.appendChild(card('毛利率', fmt.pct(s.gm_ttm), `5 年平均 ${fmt.pct(s.gm_5y)}（${fmt.bps(s.gm_vs_5y_bps)} bps）`));
+  cards.appendChild(card('ROE_TTM', typeof s.roe_ttm === 'string' ? s.roe_ttm : fmt.pct(s.roe_ttm),
+    `5 年平均 ${fmt.pct(s.roe_5y)}・每股淨值 ${fmt.num(s.bvps, 2)}`));
+  sec.appendChild(cards);
+
+  const est = DATA.est[t];
+  const yt = yearTable(rows, est, s, cfg);
+
+  sec.appendChild(subTable('年度檢視　·　每一列＝一個完整財年（由季度 rollup）',
+    ['財年', '季數', '營收($M)', '營收YoY', '毛利率', '毛利率變化(bps)', 'EPS(Adj)', 'EPS YoY',
+      'ROE', '每股配息', '年末股價', '殖利率', 'PE', 'PEG_T'],
+    yt.years.map((r) => [
+      [r.fy, 'str', true], [r.n, 'str'], [r.rev, 'money'], [r.rev_yoy, 'pct'],
+      [r.gm, 'pctp'], [r.gm_chg_bps, 'bps'], [r.eps, 'x'], [r.eps_yoy, 'pct'],
+      [r.roe, 'pctp'], [r.dps, 'x'], [r.px, 'x'], [r.yield, 'pct2'],
+      [r.pe, 'x'], [r.peg, 'x'],
+    ]).concat([
+      [[yt.ttm.label, 'str', true], ['', 'str'], [yt.ttm.rev, 'money'], [yt.ttm.rev_yoy, 'pct'],
+        [yt.ttm.gm, 'pctp'], [yt.ttm.gm_chg_bps, 'bps'], [yt.ttm.eps, 'x'], [yt.ttm.eps_yoy, 'pct'],
+        [yt.ttm.roe, 'pctp'], [yt.ttm.dps, 'x'], [yt.ttm.px, 'x'], [yt.ttm.yield, 'pct2'],
+        [yt.ttm.pe, 'x'], [yt.ttm.peg, 'x']],
+      [[yt.fwd.label, 'str', true], ['', 'str'], ['', 'str'], ['', 'str'], ['', 'str'], ['', 'str'],
+        [yt.fwd.eps, 'x'], [yt.fwd.eps_yoy, 'pct'], [yt.fwd.roe, 'pctp'], ['', 'str'], ['', 'str'],
+        ['', 'str'], [yt.fwd.pe, 'x'], [yt.fwd.peg, 'x']],
+    ]),
+    'TTM 那列的「毛利率變化」欄是「最新毛利率 − 5 年平均」，不是年對年。'));
+
+  const qt = quarterTable(rows, cfg);
+  sec.appendChild(subTable('季度檢視　·　加速度只做在這一層',
+    ['期別', '期末日', '營收($M)', '營收QoQ', '上一季QoQ', '加速度(pp)', '動能判讀',
+      '同期加速度(pp)', '營收YoY', '毛利率', 'ΔGM_YoY(bps)', 'EPS(Adj)', 'EPS YoY', '每股配息', '狀態'],
+    qt.map((r) => [
+      [r.period, 'str', true], [r.end, 'date'], [r.rev, 'money'], [r.qoq, 'pct'],
+      [r.prev_qoq, 'pct'], [r.accel_pp, 'pp'], [r.momentum, 'mom'], [r.yoy_accel_pp, 'pp'],
+      [r.rev_yoy, 'pct'], [r.gm, 'pctp'], [r.dgm_yoy_bps, 'bps'], [r.eps, 'x'],
+      [r.eps_yoy, 'pct'], [r.dps, 'x'], [r.status, 'str'],
+    ]),
+    '加速度＝本季QoQ − 上季QoQ。同期加速度＝本季QoQ − 去年同季QoQ（不受淡旺季干擾）。'));
+}
+
+function subTable(title, headers, rows, note) {
+  const wrap = el('div');
+  const h = el('div', 'sec-head');
+  h.style.borderTop = '1px solid var(--line)';
+  h.appendChild(el('h2', null, title));
+  if (note) h.appendChild(el('span', 'note', note));
+  wrap.appendChild(h);
+  const sc = el('div', 'scroll');
+  const tb = el('table');
+  const thead = el('thead'), tr = el('tr');
+  headers.forEach((x, i) => { const th = el('th', i === 0 ? 'l' : '', x); tr.appendChild(th); });
+  thead.appendChild(tr); tb.appendChild(thead);
+  const body = el('tbody');
+  for (const r of rows) {
+    const t = el('tr');
+    for (const [v, kind, left] of r) {
+      if (kind === 'mom') { t.appendChild(momCell(v)); continue; }
+      const td = kind === 'str' ? el('td', left ? 'l' : '', v === null || v === undefined || v === '' ? (left ? '' : '—') : String(v))
+        : cell(v, kind);
+      if (left) td.className = 'l';
+      t.appendChild(td);
+    }
+    body.appendChild(t);
+  }
+  tb.appendChild(body); sc.appendChild(tb); wrap.appendChild(sc);
+  return wrap;
+}
+
+/* ── 開 Issue（新增／移除）───────────────────────── */
+function openIssue(title, body) {
+  const slug = repoSlug();
+  if (!slug) {
+    alert('偵測不到 GitHub repo。請到「⚙ 設定」把 Repo 填成「帳號/repo」。');
+    return;
+  }
+  const url = `https://github.com/${slug}/issues/new?title=${encodeURIComponent(title)}`
+    + `&body=${encodeURIComponent(body)}`;
+  window.open(url, '_blank', 'noopener');
+}
+
+/* ── 事件 ────────────────────────────────────────── */
+$('#q').oninput = render;
+$('#tier').onchange = render;
+
+$('#btn-cfg').onclick = () => {
+  $('#c-peg').value = cfg.peg_min_growth;
+  $('#c-gm').value = cfg.gm_avg_quarters;
+  $('#c-an').value = cfg.min_analysts;
+  $('#c-fl').value = cfg.accel_flat_pp;
+  $('#c-qs').value = cfg.quarters_shown;
+  $('#c-ys').value = cfg.years_shown;
+  $('#c-repo').value = cfg.repo || '';
+  $('#dlg-cfg').showModal();
+};
+const CFG_FIELDS = [['#c-peg', 'peg_min_growth', parseFloat], ['#c-gm', 'gm_avg_quarters', parseInt],
+  ['#c-an', 'min_analysts', parseInt], ['#c-fl', 'accel_flat_pp', parseFloat],
+  ['#c-qs', 'quarters_shown', parseInt], ['#c-ys', 'years_shown', parseInt]];
+for (const [sel, key, parse] of CFG_FIELDS) {
+  $(sel).oninput = () => {
+    const v = parse($(sel).value);
+    if (!isFinite(v)) return;
+    cfg[key] = v; saveCfg(); recompute();
+  };
+}
+$('#c-repo').oninput = () => { cfg.repo = $('#c-repo').value.trim(); saveCfg(); };
+$('#cfg-close').onclick = () => $('#dlg-cfg').close();
+$('#cfg-reset').onclick = () => {
+  cfg = { ...DEFAULTS, repo: cfg.repo }; saveCfg(); $('#btn-cfg').onclick(); recompute();
+};
+
+$('#btn-add').onclick = () => { $('#a-t').value = ''; $('#a-note').value = '';
+  $('#a-name').value = ''; $('#dlg-add').showModal(); };
+$('#add-close').onclick = () => $('#dlg-add').close();
+$('#add-go').onclick = () => {
+  const t = $('#a-t').value.trim().toUpperCase();
+  if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(t)) { alert('代號看起來不像美股代號，請確認。'); return; }
+  const body = [`ticker: ${t}`, `tier: ${$('#a-tier').value}`,
+    `name: ${$('#a-name').value.trim()}`, `note: ${$('#a-note').value.trim()}`,
+    '', '（這張 Issue 由觀察表網頁自動產生，GitHub 處理完會自己關閉。）'].join('\n');
+  openIssue(`add: ${t}`, body);
+  $('#dlg-add').close();
+};
+
+/* ── 載入與計算 ──────────────────────────────────── */
+let QIDX = new Map();
+
+function recompute() {
+  const today = Date.now();
+  SUM = DATA.tickers.map((tk) => {
+    const rows = QIDX.get(tk.t) || [];
+    const s = computeSummary(tk.t, rows, DATA.est[tk.t], DATA.price[tk.t], cfg, today);
+    s.name = tk.name; s.tier = tk.tier; s.industry = tk.industry; s.note = tk.note;
+    return s;
+  });
+  render();
+  if (selected) renderDetail(selected);
+}
+
+async function boot() {
+  try {
+    const res = await fetch('./data.json?v=' + Date.now(), { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    DATA = await res.json();
+  } catch (e) {
+    document.querySelector('main').innerHTML =
+      `<section><div class="err">讀不到 data.json（${e.message}）。<br>`
+      + `如果這是剛開好的 GitHub Pages，等 GitHub 跑完一次 update-stock-data 再重整。</div></section>`;
+    return;
+  }
+  // 沒改過設定時，用 GitHub 上 config 的值；改過就以你自己存的為準
+  cfg = { ...DEFAULTS, ...(DATA.defaults || {}), repo: cfg.repo, ...(saved || {}) };
+  QIDX = indexQuarters(DATA.quarters);
+  $('#asof').textContent = `資料日期 ${DATA.generated || '—'}`;
+  const tiers = [...new Set(DATA.tickers.map((t) => t.tier).filter(Boolean))];
+  for (const t of tiers) { const o = el('option', null, t); o.value = t; $('#tier').appendChild(o); }
+  recompute();
+}
+boot();
+</script>
+</body>
+</html>
