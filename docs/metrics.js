@@ -27,9 +27,20 @@ export const SECTORS = [
   ['其他', ['能源', '公用事業', '原物料', '房地產', '未分類']],
 ];
 
+/* 這兩個只是「建議值」，不是白名單。等級和產業都可以自己打新的，
+   下拉選單會把你用過的值一起帶出來。 */
+export const TIERS = ['核心', '觀察', '池子'];
+
 export function sectorOf(industry) {
   for (const [sec, list] of SECTORS) if (list.includes(industry)) return sec;
-  return '其他';
+  return '自訂';
+}
+
+/** 建議清單 ∪ 資料裡實際出現過的值，後者排在最後面。 */
+export function withCustom(base, used) {
+  const seen = new Set(base);
+  const extra = [...new Set(used)].filter((v) => v && !seen.has(v)).sort();
+  return { base, extra };
 }
 
 export const NM = 'N/M';
