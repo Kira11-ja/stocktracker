@@ -442,14 +442,27 @@ def main():
             log(f"    - {e}")
         return 1
 
+
+    def keep_others(new_rows, path):
+        """--only 只跑部分股票時，沒跑到的那些要沿用舊資料，不能被整份蓋掉。"""
+        new = pd.DataFrame(new_rows)
+        if path.exists():
+            old = pd.read_csv(path)
+            if len(new) and "ticker" in old.columns:
+                old = old[~old.ticker.isin(new.ticker)]
+            new = pd.concat([new, old], ignore_index=True)
+        return new.sort_values("ticker") if "ticker" in new.columns else new
+
     master.to_csv(MASTER, index=False)
-    pd.DataFrame(meta_rows).to_csv(meta_path, index=False)
+    keep_others(meta_rows, meta_path).to_csv(meta_path, index=False)
     add_seq(master).to_csv(DATA / "raw_q.csv", index=False)
-    pd.DataFrame(est_rows).to_csv(DATA / "raw_est.csv", index=False)
-    pd.DataFrame(price_rows).to_csv(DATA / "raw_price.csv", index=False)
-    tickers.to_csv(DATA / "tickers.csv", index=False)
-    log(f"\n✓ 完成：{master.ticker.nunique()} 檔 / {len(master)} 列 / 約 {calls} 次呼叫")
-    return 0
+    keep_others(est_rows, DATA / "raw_est.csv").to_csv(DATA / "raw_est.csv", index=False)
+    keep_others(price_rows, DATA / "raw_price.csv").to_csv(DATA / "raw_price.csv", index=False)
+    # tickers.csv 要寫「完整的那份」，不是被 --only 篩過的
+    pd.read_csv(ROOT / "tickers.csv").to_csv(DATA / "tickers.csv", index=False)
+
+
+
 
 
 if __name__ == "__main__":
