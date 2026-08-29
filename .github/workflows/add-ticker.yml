@@ -1,0 +1,76 @@
+name: add-ticker
+
+# 網頁上的「＋新增股票」／「移除這檔」會開一張 Issue，這個流程負責處理它。
+# 只認 repo 擁有者開的 Issue —— 公開 repo 誰都能開 Issue，
+# 沒有這道檢查等於讓任何人改你的觀察清單、燒你的 API 額度。
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: stock-data          # 與每日更新共用，避免兩邊同時 push 打架
+  cancel-in-progress: false
+
+jobs:
+  handle:
+    if: github.event.issue.user.login == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Parse issue
+        run: python add_ticker.py
+
+      - name: Sync
+        if: success() && env.ACTION != 'none'
+        env:
+          AV_API_KEY: ${{ secrets.AV_API_KEY }}
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+        run: python sync.py
+
+      - name: Build web data
+        if: success() && env.ACTION != 'none'
+        run: python export_json.py
+
+      - name: Build Excel
+        if: success() && env.ACTION != 'none'
+        run: python build_xlsx.py
+
+      - name: Recalculate formulas
+        if: success() && env.ACTION != 'none'
+        run: |
+          if ! command -v soffice >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq --no-install-recommends libreoffice-calc
+          fi
+          python recalc_xlsx.py "美股觀察表.xlsx"
+
+      - name: Commit
+        if: success() && env.ACTION != 'none'
+        run: |
+          git config user.name  "stock-tracker-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add data/ docs/ tickers.csv "美股觀察表.xlsx"
+          git diff --staged --quiet || git commit -m "${ACTION}: ${TICKER}"
+          git push
+
+      - name: Reply and close
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUM: ${{ github.event.issue.number }}
+        run: |
+          gh issue comment "$NUM" --body "${RESULT:-處理失敗，請看 Actions 紀錄。}"
+          gh issue close "$NUM"
