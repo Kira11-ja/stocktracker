@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""從 GitHub Issue 新增／移除股票。
+"""從 GitHub Issue 新增／移除股票、或修改它的等級與備註。
 
 網頁上的「＋新增股票」會開一張標題是 `add: NVDA` 的 Issue，
-這支程式負責把它變成 tickers.csv 的一列。移除則是 `remove: NVDA`。
+這支程式負責把它變成 tickers.csv 的一列。
+移除是 `remove: NVDA`，改等級／備註是 `edit: NVDA`（新值放在 Issue 內文）。
 
 刻意直接讀 GitHub 給的事件 JSON，不從 workflow 把標題內插進 shell——
 Issue 標題是任何人都能打的字串，內插進 shell 等於開後門。
@@ -65,6 +66,14 @@ def load_tickers():
     return df
 
 
+def publish(df):
+    """tickers.csv 是輸入，data/tickers.csv 是網頁與 Excel 讀的那份。
+    只改等級／移除時不會跑 sync.py，所以這裡要自己把兩邊同步。"""
+    df.to_csv(TICKERS, index=False, quoting=csv.QUOTE_MINIMAL)
+    DATA.mkdir(exist_ok=True)
+    df.to_csv(DATA / "tickers.csv", index=False, quoting=csv.QUOTE_MINIMAL)
+
+
 def strip_from_data(t):
     """移除時，把該檔從所有產出檔一起清掉，不然網頁還會看到它。"""
     for name in ("master.csv", "meta.csv", "raw_q.csv", "raw_est.csv", "raw_price.csv"):
@@ -88,9 +97,10 @@ def main():
     title = (issue.get("title") or "").strip()
     body = issue.get("body") or ""
 
-    m = re.match(r"^\s*(add|remove)\s*[:：]\s*(.+)$", title, re.I)
+    m = re.match(r"^\s*(add|remove|edit)\s*[:：]\s*(.+)$", title, re.I)
     if not m:
-        emit(ACTION="none", TICKER="", RESULT="標題不是 add: / remove: 開頭，略過")
+        emit(ACTION="none", TICKER="",
+             RESULT="標題不是 add: / remove: / edit: 開頭，略過")
         return 0
 
     action = m.group(1).lower()
@@ -117,8 +127,7 @@ def main():
             "加入日期": dt.date.today().isoformat(),
             "備註": f.get("note", "") or "",
         }
-        df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-        df.to_csv(TICKERS, index=False, quoting=csv.QUOTE_MINIMAL)
+        publish(pd.concat([df, pd.DataFrame([row])], ignore_index=True))
         emit(ACTION="add", TICKER=t,
              RESULT=f"已加入 {t}（等級 {row['等級']}），正在抓歷史資料")
         return 0
@@ -126,8 +135,26 @@ def main():
     if t not in have:
         emit(ACTION="none", TICKER=t, RESULT=f"{t} 本來就不在清單裡")
         return 0
-    df[df.ticker.astype(str).str.upper() != t].to_csv(
-        TICKERS, index=False, quoting=csv.QUOTE_MINIMAL)
+
+    if action == "edit":
+        f = parse_body(body)
+        hit = df.ticker.astype(str).str.upper() == t
+        changed = []
+        if f.get("tier") in TIERS:
+            df.loc[hit, "等級"] = f["tier"]
+            changed.append(f"等級 → {f['tier']}")
+        if "note" in f:
+            df.loc[hit, "備註"] = f["note"]
+            changed.append("備註已更新" if f["note"] else "備註已清空")
+        if not changed:
+            emit(ACTION="none", TICKER=t,
+                 RESULT=f"{t} 沒有指定要改什麼（等級只接受 核心／觀察／池子）")
+            return 0
+        publish(df)
+        emit(ACTION="edit", TICKER=t, RESULT=f"{t}：{'、'.join(changed)}")
+        return 0
+
+    publish(df[df.ticker.astype(str).str.upper() != t])
     strip_from_data(t)
     emit(ACTION="remove", TICKER=t, RESULT=f"已移除 {t} 與它的歷史資料")
     return 0
