@@ -22,10 +22,26 @@ import pandas as pd
 ROOT = Path(__file__).parent
 DATA = ROOT / "data"
 TICKERS = ROOT / "tickers.csv"
-COLS = ["ticker", "公司名稱", "產業", "等級", "加入日期", "備註"]
+# 欄名沿用 repo 原本的英文鍵 —— build_xlsx.py 是用 t.get("company") / t.get("sector")
+# 取值的，改成中文欄名會讓 Excel 的 Tickers 分頁整片空白。
+COLS = ["ticker", "company", "sector", "tier", "added", "note", "tags"]
+TAG_SEP = "、"
+TAG_SPLIT = re.compile(r"[、,，;；]+")
+TAG_MAX = 6
 SYMBOL = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
 DEFAULT_TIER = "池子"
 LABEL_MAX = 16
+
+
+def tags(v):
+    """標籤是多值的，用頓號或逗號分隔。空字串＝清空。"""
+    parts = [label(x) for x in TAG_SPLIT.split(str(v or ""))]
+    seen, out = set(), []
+    for x in parts:
+        if x and x not in seen:
+            seen.add(x)
+            out.append(x)
+    return TAG_SEP.join(out[:TAG_MAX])
 
 
 def label(v):
@@ -58,7 +74,7 @@ def parse_body(body):
             continue
         k, v = line.split(":", 1)
         k = k.strip().lower()
-        if k in ("tier", "name", "note", "industry"):
+        if k in ("tier", "name", "note", "industry", "tags"):
             out[k] = v.strip()
     return out
 
@@ -128,15 +144,16 @@ def main():
         f = parse_body(body)
         row = {
             "ticker": t,
-            "公司名稱": label(f.get("name")),
-            "產業": label(f.get("industry")) or "未分類",
-            "等級": label(f.get("tier")) or DEFAULT_TIER,
-            "加入日期": dt.date.today().isoformat(),
-            "備註": (f.get("note") or "").strip()[:200],
+            "company": label(f.get("name")),
+            "sector": label(f.get("industry")) or "未分類",
+            "tier": label(f.get("tier")) or DEFAULT_TIER,
+            "added": dt.date.today().isoformat(),
+            "note": (f.get("note") or "").strip()[:200],
+            "tags": tags(f.get("tags")),
         }
         publish(pd.concat([df, pd.DataFrame([row])], ignore_index=True))
         emit(ACTION="add", TICKER=t,
-             RESULT=f"已加入 {t}（等級 {row['等級']}），正在抓歷史資料")
+             RESULT=f"已加入 {t}（等級 {row['tier']}），正在抓歷史資料")
         return 0
 
     if t not in have:
@@ -147,17 +164,21 @@ def main():
         f = parse_body(body)
         hit = df.ticker.astype(str).str.upper() == t
         changed = []
-        for key, col in (("tier", "等級"), ("industry", "產業")):
+        for key, col, zh in (("tier", "tier", "等級"), ("industry", "sector", "產業")):
             if key not in f:
                 continue
             v = label(f[key])
             if not v:                      # 留空＝不動，避免手滑清掉分類
                 continue
             df.loc[hit, col] = v
-            changed.append(f"{col} → {v}")
+            changed.append(f"{zh} → {v}")
+        if "tags" in f:                    # 標籤留空＝清空，跟等級不同
+            v = tags(f["tags"])
+            df.loc[hit, "tags"] = v
+            changed.append(f"標籤 → {v}" if v else "標籤已清空")
         if "note" in f:
             note = f["note"].strip()[:200]
-            df.loc[hit, "備註"] = note
+            df.loc[hit, "note"] = note
             changed.append("備註已更新" if note else "備註已清空")
         if not changed:
             emit(ACTION="none", TICKER=t, RESULT=f"{t} 沒有指定要改什麼")
