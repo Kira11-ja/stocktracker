@@ -63,6 +63,10 @@ tbody tr.sel{background:var(--accent-soft)}
 #tbl tbody tr:hover td:first-child{background:var(--chip)}
 #tbl tbody tr.sel td:first-child{background:var(--accent-soft)}
 #detail{scroll-margin-top:64px}
+#tbl tfoot td{border-top:2px solid var(--line);border-bottom:none;
+  background:var(--chip);font-weight:600;position:sticky;bottom:0}
+#tbl tfoot td:first-child{position:sticky;left:0;bottom:0;z-index:3;background:var(--chip)}
+.medlabel{font-weight:700;color:var(--dim);font-size:12px}
 .tk{font-weight:700;cursor:pointer}
 .up{color:var(--up)} .down{color:var(--down)} .nm{color:var(--faint)}
 .badge{display:inline-block;padding:1px 7px;border-radius:99px;font-size:11.5px;font-weight:600}
@@ -108,6 +112,7 @@ code{background:var(--chip);padding:1px 5px;border-radius:4px;font-size:12px}
   <span class="spacer"></span>
   <input id="q" type="search" placeholder="搜尋代號／公司" style="width:150px">
   <select id="tier"><option value="">全部等級</option></select>
+  <select id="ind"><option value="">全部產業</option></select>
   <button id="btn-add" class="primary">＋ 新增股票</button>
   <button id="btn-cfg">⚙ 設定</button>
 </header>
@@ -120,7 +125,7 @@ code{background:var(--chip);padding:1px 5px;border-radius:4px;font-size:12px}
       <span class="spacer"></span>
       <span class="note" id="count"></span>
     </div>
-    <div class="scroll"><table id="tbl"><thead></thead><tbody></tbody></table></div>
+    <div class="scroll"><table id="tbl"><thead></thead><tbody></tbody><tfoot></tfoot></table></div>
   </section>
 
   <section id="detail" hidden></section>
@@ -156,6 +161,24 @@ code{background:var(--chip);padding:1px 5px;border-radius:4px;font-size:12px}
   </div>
 </dialog>
 
+<dialog id="dlg-edit">
+  <div class="dlg-body">
+    <h3>編輯 <span id="e-t"></span></h3>
+    <p>等級和備註只是你自己貼的標籤，不影響任何指標計算——只用來篩選和分組。
+       送出後同樣是開一張 Issue，因為不用重抓資料，大約一分鐘就會生效。</p>
+    <div class="row"><label>等級</label>
+      <select id="e-tier"><option>核心</option><option>觀察</option><option>池子</option></select></div>
+    <div class="row"><label>產業<span class="hint">同產業才好互相比較</span></label>
+      <select id="e-ind"></select></div>
+    <div class="row"><label>備註</label></div>
+    <div class="row"><input id="e-note" type="text" placeholder="想追蹤的重點"></div>
+  </div>
+  <div class="dlg-foot">
+    <button id="edit-close">取消</button>
+    <button id="edit-go" class="primary">開 Issue 送出</button>
+  </div>
+</dialog>
+
 <dialog id="dlg-add">
   <div class="dlg-body">
     <h3>新增股票</h3>
@@ -165,6 +188,8 @@ code{background:var(--chip);padding:1px 5px;border-radius:4px;font-size:12px}
       <input id="a-t" type="text" placeholder="NVDA" style="text-transform:uppercase"></div>
     <div class="row"><label>等級</label>
       <select id="a-tier"><option>核心</option><option>觀察</option><option selected>池子</option></select></div>
+    <div class="row"><label>產業</label>
+      <select id="a-ind"></select></div>
     <div class="row"><label>公司名稱<span class="hint">留空會自動抓</span></label></div>
     <div class="row"><input id="a-name" type="text" placeholder="留空即可"></div>
     <div class="row"><label>備註</label></div>
@@ -177,8 +202,8 @@ code{background:var(--chip);padding:1px 5px;border-radius:4px;font-size:12px}
 </dialog>
 
 <script type="module">
-import { DEFAULTS, NM, isNum, indexQuarters, computeSummary, quarterTable, yearTable }
-  from './metrics.js';
+import { DEFAULTS, NM, isNum, indexQuarters, computeSummary, quarterTable, yearTable,
+  SECTORS, sectorOf } from './metrics.js';
 
 const $ = (s) => document.querySelector(s);
 const el = (tag, cls, txt) => { const e = document.createElement(tag);
@@ -283,6 +308,42 @@ const COLS = [
 
 let DATA = null, SUM = [], sortKey = 't', sortDir = 1, selected = null;
 
+/* 產業下拉：編輯／新增用完整清單，篩選器只列實際有股票的產業 */
+function fillIndustryPicker(sel) {
+  sel.innerHTML = '';
+  for (const [sector, list] of SECTORS) {
+    const g = el('optgroup'); g.label = sector;
+    for (const name of list) { const o = el('option', null, name); o.value = name; g.appendChild(o); }
+    sel.appendChild(g);
+  }
+}
+function fillIndustryFilter(sel, tickers) {
+  sel.innerHTML = '';
+  const all = el('option', null, '全部產業'); all.value = ''; sel.appendChild(all);
+  const used = new Set(tickers.map((t) => t.industry).filter(Boolean));
+  const groups = new Map();
+  for (const name of used) {
+    const sec = sectorOf(name);
+    if (!groups.has(sec)) groups.set(sec, []);
+    groups.get(sec).push(name);
+  }
+  for (const [sector, list] of SECTORS.map(([s]) => [s, groups.get(s)]).filter(([, l]) => l)) {
+    const g = el('optgroup'); g.label = sector;
+    for (const name of list.sort()) {
+      const n = tickers.filter((t) => t.industry === name).length;
+      const o = el('option', null, `${name}（${n}）`); o.value = name; g.appendChild(o);
+    }
+    sel.appendChild(g);
+  }
+}
+
+function median(xs) {
+  const v = xs.filter(isNum).sort((a, b) => a - b);
+  if (!v.length) return null;
+  const m = Math.floor(v.length / 2);
+  return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
+}
+
 function buildHead() {
   const thead = $('#tbl thead');
   thead.innerHTML = '';
@@ -316,9 +377,11 @@ function render() {
   buildHead();
   const term = $('#q').value.trim().toUpperCase();
   const tier = $('#tier').value;
+  const ind = $('#ind').value;
   let rows = SUM.filter((r) =>
     (!term || r.t.includes(term) || (r.name || '').toUpperCase().includes(term)) &&
-    (!tier || r.tier === tier));
+    (!tier || r.tier === tier) &&
+    (!ind || r.industry === ind));
 
   rows.sort((a, b) => {
     const x = sortVal(a, sortKey), y = sortVal(b, sortKey);
@@ -359,7 +422,31 @@ function render() {
     }
     tb.appendChild(tr);
   }
-  $('#count').textContent = `${rows.length} / ${SUM.length} 檔`;
+  renderFooter(rows, ind);
+  $('#count').textContent = ind
+    ? `${ind}　${rows.length} 檔`
+    : `${rows.length} / ${SUM.length} 檔`;
+}
+
+/* 同業比較用的中位數列。中位數不是平均 —— 一檔 ROE 148% 的 AAPL
+   會把平均整個拉走，中位數不會。 */
+function renderFooter(rows, ind) {
+  const tf = $('#tbl tfoot');
+  tf.innerHTML = '';
+  if (rows.length < 2) return;
+  const tr = el('tr', 'medrow');
+  for (const c of COLS) {
+    if (c.k === 't') {
+      const td = el('td', 'l');
+      td.appendChild(el('div', 'medlabel', '中位數'));
+      td.appendChild(el('div', 'tier', ind ? `${ind} ${rows.length} 檔` : `全部 ${rows.length} 檔`));
+      tr.appendChild(td);
+      continue;
+    }
+    if (['str', 'mom', 'date', 'tk'].includes(c.kind)) { tr.appendChild(el('td')); continue; }
+    tr.appendChild(cell(median(rows.map((r) => r[c.k])), c.kind));
+  }
+  tf.appendChild(tr);
 }
 
 /* ── 個股細節 ────────────────────────────────────── */
@@ -376,8 +463,19 @@ function renderDetail(t) {
   head.appendChild(el('span', 'note',
     `${s.tier || ''}　EPS 口徑：${s.eps_basis === 'gaap' ? 'GAAP' : 'Adjusted（街頭）'}　`
     + `資料日期 ${fmt.date(s.as_of)}　下次財報 ${fmt.date(s.next_earnings)}`));
+  if (s.note) head.appendChild(el('span', 'note', '「' + s.note + '」'));
   head.appendChild(el('span', 'spacer'));
-  const rm = el('button', null, '移除這檔');
+  const ed = el('button', null, '編輯');
+  ed.onclick = () => {
+    $('#e-t').textContent = t;
+    $('#e-tier').value = s.tier || '池子';
+    $('#e-ind').value = s.industry || '未分類';
+    $('#e-note').value = s.note || '';
+    $('#dlg-edit').dataset.t = t;
+    $('#dlg-edit').showModal();
+  };
+  head.appendChild(ed);
+  const rm = el('button', null, '移除');
   rm.onclick = () => openIssue(`remove: ${t}`, `請把 ${t} 從 tickers.csv 移除。`);
   head.appendChild(rm);
   sec.appendChild(head);
@@ -490,6 +588,7 @@ function openIssue(title, body) {
 /* ── 事件 ────────────────────────────────────────── */
 $('#q').oninput = render;
 $('#tier').onchange = render;
+$('#ind').onchange = render;
 
 $('#btn-cfg').onclick = () => {
   $('#c-peg').value = cfg.peg_min_growth;
@@ -517,6 +616,16 @@ $('#cfg-reset').onclick = () => {
   cfg = { ...DEFAULTS, repo: cfg.repo }; saveCfg(); $('#btn-cfg').onclick(); recompute();
 };
 
+$('#edit-close').onclick = () => $('#dlg-edit').close();
+$('#edit-go').onclick = () => {
+  const t = $('#dlg-edit').dataset.t;
+  const body = [`tier: ${$('#e-tier').value}`, `industry: ${$('#e-ind').value}`,
+    `note: ${$('#e-note').value.trim()}`,
+    '', '（這張 Issue 由觀察表網頁自動產生，GitHub 處理完會自己關閉。）'].join('\n');
+  openIssue(`edit: ${t}`, body);
+  $('#dlg-edit').close();
+};
+
 $('#btn-add').onclick = () => { $('#a-t').value = ''; $('#a-note').value = '';
   $('#a-name').value = ''; $('#dlg-add').showModal(); };
 $('#add-close').onclick = () => $('#dlg-add').close();
@@ -524,6 +633,7 @@ $('#add-go').onclick = () => {
   const t = $('#a-t').value.trim().toUpperCase();
   if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(t)) { alert('代號看起來不像美股代號，請確認。'); return; }
   const body = [`ticker: ${t}`, `tier: ${$('#a-tier').value}`,
+    `industry: ${$('#a-ind').value}`,
     `name: ${$('#a-name').value.trim()}`, `note: ${$('#a-note').value.trim()}`,
     '', '（這張 Issue 由觀察表網頁自動產生，GitHub 處理完會自己關閉。）'].join('\n');
   openIssue(`add: ${t}`, body);
@@ -560,8 +670,14 @@ async function boot() {
   cfg = { ...DEFAULTS, ...(DATA.defaults || {}), repo: cfg.repo, ...(saved || {}) };
   QIDX = indexQuarters(DATA.quarters);
   $('#asof').textContent = `資料日期 ${DATA.generated || '—'}`;
-  const tiers = [...new Set(DATA.tickers.map((t) => t.tier).filter(Boolean))];
-  for (const t of tiers) { const o = el('option', null, t); o.value = t; $('#tier').appendChild(o); }
+  for (const t of ['核心', '觀察', '池子']) {
+    if (!DATA.tickers.some((x) => x.tier === t)) continue;
+    const o = el('option', null, t); o.value = t; $('#tier').appendChild(o);
+  }
+  fillIndustryFilter($('#ind'), DATA.tickers);
+  fillIndustryPicker($('#e-ind'));
+  fillIndustryPicker($('#a-ind'));
+  $('#a-ind').value = '未分類';
   recompute();
 }
 boot();
