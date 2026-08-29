@@ -453,6 +453,7 @@ def main():
         return new.sort_values("ticker") if "ticker" in new.columns else new
 
 
+
     def keep_others(new_rows, path):
         """--only 只跑部分股票時，沒跑到的那些要沿用舊資料，不能被整份蓋掉。"""
         new = pd.DataFrame(new_rows)
