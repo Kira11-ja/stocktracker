@@ -33,8 +33,10 @@ jobs:
       - name: Parse issue
         run: python add_ticker.py
 
+      # 只有新增才需要去外面抓資料。移除與改等級都只動 tickers.csv，
+      # add_ticker.py 已經把 data/ 一起處理好了，重建就行，省掉三到五分鐘。
       - name: Sync
-        if: success() && env.ACTION != 'none'
+        if: success() && env.ACTION == 'add'
         env:
           AV_API_KEY: ${{ secrets.AV_API_KEY }}
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
