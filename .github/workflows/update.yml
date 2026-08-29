@@ -63,9 +63,34 @@ jobs:
           python recalc_xlsx.py "美股觀察表.xlsx"
 
       - name: Commit
+        env:
+          BRANCH: ${{ github.ref_name }}
         run: |
           git config user.name  "stock-tracker-bot"
           git config user.email "bot@users.noreply.github.com"
-          git add data/ docs/ "美股觀察表.xlsx"
-          git diff --staged --quiet || git commit -m "data: $(date -u +%F)"
-          git push
+          git add -A data/ docs/ "美股觀察表.xlsx"
+          # 注意：`git diff --quiet || cmd` 在 bash -e 底下，
+          # 「沒有變更」那條路會讓整個步驟以 1 結束。要用 if。
+          if git diff --staged --quiet; then
+            echo "沒有任何變更，不需要 commit"
+            exit 0
+          fi
+          git commit -m "data: $(date -u +%F)"
+          # 這段期間 main 可能已經前進（你在網頁上改了檔案、或另一個流程剛推完），
+          # 直接 push 會被拒。先試乾淨的合併——多數情況雙方改的檔案不重疊，
+          # 這樣兩邊的東西都會留著。真的撞在同一行才退而求其次用這次的版本，
+          # 因為 data/ docs/ 與 Excel 都是重跑就會一致的產物。
+          for i in 1 2 3; do
+            if git push; then
+              exit 0
+            fi
+            echo "推送被拒（第 $i 次），把遠端的變更接上來再試"
+            if ! git pull --no-rebase --no-edit origin "$BRANCH"; then
+              echo "有檔案撞在一起，這幾個產物以本次結果為準"
+              git merge --abort || true
+              git pull --no-rebase --no-edit -X ours origin "$BRANCH"
+            fi
+            sleep 3
+          done
+          echo "::error::連續三次推不上去，請看 Actions 是否有其他流程同時在寫入"
+          exit 1
