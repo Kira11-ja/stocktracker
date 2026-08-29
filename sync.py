@@ -452,6 +452,17 @@ def main():
             new = pd.concat([new, old], ignore_index=True)
         return new.sort_values("ticker") if "ticker" in new.columns else new
 
+
+    def keep_others(new_rows, path):
+        """--only 只跑部分股票時，沒跑到的那些要沿用舊資料，不能被整份蓋掉。"""
+        new = pd.DataFrame(new_rows)
+        if path.exists():
+            old = pd.read_csv(path)
+            if len(new) and "ticker" in old.columns:
+                old = old[~old.ticker.isin(new.ticker)]
+            new = pd.concat([new, old], ignore_index=True)
+        return new.sort_values("ticker") if "ticker" in new.columns else new
+
     master.to_csv(MASTER, index=False)
     keep_others(meta_rows, meta_path).to_csv(meta_path, index=False)
     add_seq(master).to_csv(DATA / "raw_q.csv", index=False)
