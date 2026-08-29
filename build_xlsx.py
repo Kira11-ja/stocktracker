@@ -179,20 +179,21 @@ def X(name, r):
 
 
 # ===================== Tickers =====================
+# 欄位對齊 tickers.csv：多了「標籤」（題材，可多值，用頓號分隔）。
+# 等級的下拉限制拿掉了 —— 等級與產業都改成自由文字，可以自己打新的。
+# ticker / 公司 / 等級 仍在 A / B / D，Calc 分頁的參照不受影響。
 ws = wb.create_sheet("Tickers")
-ws.append(["ticker", "公司名稱", "產業", "等級", "加入日期", "備註"])
-style_header(ws, 1, 6)
+ws.append(["ticker", "公司名稱", "產業", "等級", "標籤", "加入日期", "備註"])
+style_header(ws, 1, 7)
 for t in TICKERS:
     ws.append([t.get("ticker"), t.get("company"), t.get("sector"),
-               t.get("tier"), t.get("added"), t.get("note")])
+               t.get("tier"), t.get("tags"), t.get("added"), t.get("note")])
 for r in range(2, 22):
-    for c in range(1, 7):
+    for c in range(1, 8):
         ws.cell(row=r, column=c).font = IN_FONT
-    ws.cell(row=r, column=5).number_format = DATE
-widths(ws, {"A": 10, "B": 24, "C": 13, "D": 9, "E": 13, "F": 34})
+    ws.cell(row=r, column=6).number_format = DATE
+widths(ws, {"A": 10, "B": 24, "C": 13, "D": 9, "E": 18, "F": 13, "G": 34})
 ws.freeze_panes = "A2"
-dv_t = DataValidation(type="list", formula1='"核心,觀察,池子"', allow_blank=True)
-ws.add_data_validation(dv_t); dv_t.add("D2:D21")
 ws.cell(row=24, column=1,
         value="↑ 藍字＝手動輸入。新增股票就在第 2~21 列往下打一列，其餘分頁全自動延伸。").font = NOTE_FONT
 
