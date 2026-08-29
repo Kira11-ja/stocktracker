@@ -24,7 +24,15 @@ DATA = ROOT / "data"
 TICKERS = ROOT / "tickers.csv"
 COLS = ["ticker", "公司名稱", "產業", "等級", "加入日期", "備註"]
 SYMBOL = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
-TIERS = {"核心", "觀察", "池子"}
+DEFAULT_TIER = "池子"
+LABEL_MAX = 16
+
+
+def label(v):
+    """等級與產業是自由文字，你想打什麼都行——這裡只做基本清理，不設白名單。
+    代號有白名單是因為它會被拿去打 API；標籤只是存進 CSV 給人看。"""
+    v = re.sub(r"[\r\n\t]+", " ", str(v or "")).strip()
+    return v[:LABEL_MAX]
 
 
 def emit(**kv):
@@ -118,14 +126,13 @@ def main():
             emit(ACTION="none", TICKER=t, RESULT=f"{t} 已經在清單裡了，沒有重複加入")
             return 0
         f = parse_body(body)
-        tier = f.get("tier", "")
         row = {
             "ticker": t,
-            "公司名稱": f.get("name", "") or "",
-            "產業": f.get("industry", "") or "",
-            "等級": tier if tier in TIERS else "池子",
+            "公司名稱": label(f.get("name")),
+            "產業": label(f.get("industry")) or "未分類",
+            "等級": label(f.get("tier")) or DEFAULT_TIER,
             "加入日期": dt.date.today().isoformat(),
-            "備註": f.get("note", "") or "",
+            "備註": (f.get("note") or "").strip()[:200],
         }
         publish(pd.concat([df, pd.DataFrame([row])], ignore_index=True))
         emit(ACTION="add", TICKER=t,
@@ -140,15 +147,20 @@ def main():
         f = parse_body(body)
         hit = df.ticker.astype(str).str.upper() == t
         changed = []
-        if f.get("tier") in TIERS:
-            df.loc[hit, "等級"] = f["tier"]
-            changed.append(f"等級 → {f['tier']}")
+        for key, col in (("tier", "等級"), ("industry", "產業")):
+            if key not in f:
+                continue
+            v = label(f[key])
+            if not v:                      # 留空＝不動，避免手滑清掉分類
+                continue
+            df.loc[hit, col] = v
+            changed.append(f"{col} → {v}")
         if "note" in f:
-            df.loc[hit, "備註"] = f["note"]
-            changed.append("備註已更新" if f["note"] else "備註已清空")
+            note = f["note"].strip()[:200]
+            df.loc[hit, "備註"] = note
+            changed.append("備註已更新" if note else "備註已清空")
         if not changed:
-            emit(ACTION="none", TICKER=t,
-                 RESULT=f"{t} 沒有指定要改什麼（等級只接受 核心／觀察／池子）")
+            emit(ACTION="none", TICKER=t, RESULT=f"{t} 沒有指定要改什麼")
             return 0
         publish(df)
         emit(ACTION="edit", TICKER=t, RESULT=f"{t}：{'、'.join(changed)}")
