@@ -61,7 +61,7 @@ def main():
     q = read("raw_q.csv", dates=["period_end"])
     est = read("raw_est.csv", dates=["fy1_end", "as_of"])
     price = read("raw_price.csv", dates=["price_date", "next_earnings", "as_of"])
-    tick = read("tickers.csv", dates=["加入日期", "added"])
+    tick = read("tickers.csv", dates=["added", "加入日期"])
 
     for c in MILLIONS:
         if c in q.columns:
@@ -113,13 +113,23 @@ def main():
         if not t or not SYMBOL.match(str(t).strip().upper()):
             continue
         t = str(t).strip().upper()
+        # repo 的 tickers.csv 用英文欄名（build_xlsx.py 也是讀這組），
+        # 中文欄名留著當備援，兩種都吃得下。
+        def col(*names):
+            for n in names:
+                v = clean(r.get(n))
+                if v not in (None, ""):
+                    return v
+            return ""
+        raw_tags = str(col("tags", "標籤") or "")
         tickers.append({
             "t": t,
-            "name": clean(r.get("公司名稱")) or clean(r.get("name")) or t,
-            "industry": clean(r.get("產業")) or clean(r.get("industry")) or "",
-            "tier": clean(r.get("等級")) or clean(r.get("tier")) or "池子",
-            "added": clean(r.get("加入日期")) or clean(r.get("added")) or "",
-            "note": clean(r.get("備註")) or clean(r.get("note")) or "",
+            "name": col("company", "公司名稱", "name") or t,
+            "industry": col("sector", "產業", "industry") or "未分類",
+            "tier": col("tier", "等級") or "池子",
+            "added": col("added", "加入日期"),
+            "note": col("note", "備註"),
+            "tags": [x.strip() for x in re.split(r"[、,，;；]+", raw_tags) if x.strip()],
         })
 
     as_of = max([v["as_of"] for v in px_map.values() if v["as_of"]], default="")
