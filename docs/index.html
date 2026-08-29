@@ -75,6 +75,11 @@ tbody tr.sel{background:var(--accent-soft)}
 .b-sc{background:rgba(138,109,0,.16);color:var(--flat)}
 .b-sd{background:rgba(192,39,45,.14);color:var(--down)}
 .tier{font-size:11.5px;color:var(--dim)}
+.tags{display:flex;gap:4px;flex-wrap:wrap;margin-top:3px}
+.tag{font-size:11px;padding:0 6px;border-radius:4px;border:1px solid var(--line);
+  color:var(--dim);background:var(--chip);cursor:pointer;line-height:17px}
+.tag:hover{color:var(--ink);border-color:var(--accent)}
+.tag.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
 .flags{color:var(--flat);font-size:11.5px}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
   gap:1px;background:var(--line2)}
@@ -113,6 +118,7 @@ code{background:var(--chip);padding:1px 5px;border-radius:4px;font-size:12px}
   <input id="q" type="search" placeholder="搜尋代號／公司" style="width:150px">
   <select id="tier"><option value="">全部等級</option></select>
   <select id="ind"><option value="">全部產業</option></select>
+  <select id="tag"><option value="">全部標籤</option></select>
   <button id="btn-add" class="primary">＋ 新增股票</button>
   <button id="btn-cfg">⚙ 設定</button>
 </header>
@@ -173,6 +179,9 @@ code{background:var(--chip);padding:1px 5px;border-radius:4px;font-size:12px}
       <input id="e-tier" list="dl-tier" autocomplete="off"></div>
     <div class="row"><label>產業<span class="hint">同產業才好互相比較。也可以自己打</span></label>
       <input id="e-ind" list="dl-ind" autocomplete="off"></div>
+    <div class="row"><label>標籤<span class="hint">題材可以貼好幾個，用頓號或逗號分隔。最多 6 個</span></label></div>
+    <div class="row"><input id="e-tags" type="text" placeholder="例：CPO、AI、資料中心"></div>
+    <div class="row" id="e-tagpool" style="flex-wrap:wrap;gap:6px"></div>
     <div class="row"><label>備註</label></div>
     <div class="row"><input id="e-note" type="text" placeholder="想追蹤的重點"></div>
   </div>
@@ -195,6 +204,8 @@ code{background:var(--chip);padding:1px 5px;border-radius:4px;font-size:12px}
       <input id="a-ind" list="dl-ind" autocomplete="off"></div>
     <div class="row"><label>公司名稱<span class="hint">留空會自動抓</span></label></div>
     <div class="row"><input id="a-name" type="text" placeholder="留空即可"></div>
+    <div class="row"><label>標籤<span class="hint">用頓號或逗號分隔</span></label></div>
+    <div class="row"><input id="a-tags" type="text" placeholder="例：CPO、AI"></div>
     <div class="row"><label>備註</label></div>
     <div class="row"><input id="a-note" type="text" placeholder="想追蹤的重點"></div>
   </div>
@@ -360,6 +371,28 @@ function fillIndustryFilter(sel, tickers) {
   sel.value = cur;
 }
 
+function fillTagFilter(sel, tickers) {
+  const cur = sel.value;
+  sel.innerHTML = '';
+  const all = el('option', null, '全部標籤'); all.value = ''; sel.appendChild(all);
+  const count = new Map();
+  for (const t of tickers) for (const g of (t.tags || [])) count.set(g, (count.get(g) || 0) + 1);
+  for (const [g, n] of [...count].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))) {
+    const o = el('option', null, `${g}（${n}）`); o.value = g; sel.appendChild(o);
+  }
+  sel.value = cur;
+}
+
+function tagChips(list, onPick) {
+  const box = el('div', 'tags');
+  for (const g of list) {
+    const c = el('span', 'tag' + ($('#tag').value === g ? ' on' : ''), g);
+    c.onclick = (ev) => { ev.stopPropagation(); onPick(g); };
+    box.appendChild(c);
+  }
+  return box;
+}
+
 function median(xs) {
   const v = xs.filter(isNum).sort((a, b) => a - b);
   if (!v.length) return null;
@@ -401,10 +434,12 @@ function render() {
   const term = $('#q').value.trim().toUpperCase();
   const tier = $('#tier').value;
   const ind = $('#ind').value;
+  const tag = $('#tag').value;
   let rows = SUM.filter((r) =>
     (!term || r.t.includes(term) || (r.name || '').toUpperCase().includes(term)) &&
     (!tier || r.tier === tier) &&
-    (!ind || r.industry === ind));
+    (!ind || r.industry === ind) &&
+    (!tag || (r.tags || []).includes(tag)));
 
   rows.sort((a, b) => {
     const x = sortVal(a, sortKey), y = sortVal(b, sortKey);
@@ -435,7 +470,12 @@ function render() {
       } else if (c.kind === 'str' && c.k === 'name') {
         const td = el('td', 'l');
         td.appendChild(el('div', null, r.name || r.t));
-        td.appendChild(el('div', 'tier', r.tier || ''));
+        td.appendChild(el('div', 'tier', [r.tier, r.industry].filter(Boolean).join('・')));
+        if (r.tags && r.tags.length) {
+          td.appendChild(tagChips(r.tags, (g) => {
+            $('#tag').value = $('#tag').value === g ? '' : g; render();
+          }));
+        }
         tr.appendChild(td);
       } else if (c.kind === 'mom') {
         tr.appendChild(momCell(r[c.k]));
@@ -445,15 +485,16 @@ function render() {
     }
     tb.appendChild(tr);
   }
-  renderFooter(rows, ind);
-  $('#count').textContent = ind
-    ? `${ind}　${rows.length} 檔`
+  renderFooter(rows, [ind, tag].filter(Boolean).join(' · '));
+  const scope = [ind, tag].filter(Boolean).join(' · ');
+  $('#count').textContent = scope
+    ? `${scope}　${rows.length} 檔`
     : `${rows.length} / ${SUM.length} 檔`;
 }
 
 /* 同業比較用的中位數列。中位數不是平均 —— 一檔 ROE 148% 的 AAPL
    會把平均整個拉走，中位數不會。 */
-function renderFooter(rows, ind) {
+function renderFooter(rows, scope) {
   const tf = $('#tbl tfoot');
   tf.innerHTML = '';
   if (rows.length < 2) return;
@@ -462,7 +503,7 @@ function renderFooter(rows, ind) {
     if (c.k === 't') {
       const td = el('td', 'l');
       td.appendChild(el('div', 'medlabel', '中位數'));
-      td.appendChild(el('div', 'tier', ind ? `${ind} ${rows.length} 檔` : `全部 ${rows.length} 檔`));
+      td.appendChild(el('div', 'tier', scope ? `${scope} ${rows.length} 檔` : `全部 ${rows.length} 檔`));
       tr.appendChild(td);
       continue;
     }
@@ -486,6 +527,12 @@ function renderDetail(t) {
   head.appendChild(el('span', 'note',
     `${s.tier || ''}　EPS 口徑：${s.eps_basis === 'gaap' ? 'GAAP' : 'Adjusted（街頭）'}　`
     + `資料日期 ${fmt.date(s.as_of)}　下次財報 ${fmt.date(s.next_earnings)}`));
+  if (s.tags && s.tags.length) {
+    head.appendChild(tagChips(s.tags, (g) => {
+      $('#tag').value = g; render();
+      document.querySelector('#overview').scrollIntoView({ behavior: 'smooth' });
+    }));
+  }
   if (s.note) head.appendChild(el('span', 'note', '「' + s.note + '」'));
   head.appendChild(el('span', 'spacer'));
   const ed = el('button', null, '編輯');
@@ -493,6 +540,17 @@ function renderDetail(t) {
     $('#e-t').textContent = t;
     $('#e-tier').value = s.tier || '池子';
     $('#e-ind').value = s.industry || '';
+    $('#e-tags').value = (s.tags || []).join('、');
+    const pool = $('#e-tagpool'); pool.innerHTML = '';
+    const known = [...new Set(SUM.flatMap((x) => x.tags || []))].sort();
+    if (known.length) {
+      pool.appendChild(el('span', 'hint', '點一下加入：'));
+      pool.appendChild(tagChips(known, (g) => {
+        const cur = $('#e-tags').value.split(/[、,，;；]+/).map((x) => x.trim()).filter(Boolean);
+        const next = cur.includes(g) ? cur.filter((x) => x !== g) : [...cur, g];
+        $('#e-tags').value = next.join('、');
+      }));
+    }
     $('#e-note').value = s.note || '';
     $('#dlg-edit').dataset.t = t;
     $('#dlg-edit').showModal();
@@ -612,6 +670,7 @@ function openIssue(title, body) {
 $('#q').oninput = render;
 $('#tier').onchange = render;
 $('#ind').onchange = render;
+$('#tag').onchange = render;
 
 $('#btn-cfg').onclick = () => {
   $('#c-peg').value = cfg.peg_min_growth;
@@ -643,20 +702,21 @@ $('#edit-close').onclick = () => $('#dlg-edit').close();
 $('#edit-go').onclick = () => {
   const t = $('#dlg-edit').dataset.t;
   const body = [`tier: ${$('#e-tier').value}`, `industry: ${$('#e-ind').value}`,
-    `note: ${$('#e-note').value.trim()}`,
+    `tags: ${$('#e-tags').value.trim()}`, `note: ${$('#e-note').value.trim()}`,
     '', '（這張 Issue 由觀察表網頁自動產生，GitHub 處理完會自己關閉。）'].join('\n');
   openIssue(`edit: ${t}`, body);
   $('#dlg-edit').close();
 };
 
 $('#btn-add').onclick = () => { $('#a-t').value = ''; $('#a-note').value = '';
-  $('#a-name').value = ''; $('#dlg-add').showModal(); };
+  $('#a-name').value = ''; $('#a-tags').value = ''; $('#dlg-add').showModal(); };
 $('#add-close').onclick = () => $('#dlg-add').close();
 $('#add-go').onclick = () => {
   const t = $('#a-t').value.trim().toUpperCase();
   if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(t)) { alert('代號看起來不像美股代號，請確認。'); return; }
   const body = [`ticker: ${t}`, `tier: ${$('#a-tier').value}`,
     `industry: ${$('#a-ind').value}`,
+    `tags: ${$('#a-tags').value.trim()}`,
     `name: ${$('#a-name').value.trim()}`, `note: ${$('#a-note').value.trim()}`,
     '', '（這張 Issue 由觀察表網頁自動產生，GitHub 處理完會自己關閉。）'].join('\n');
   openIssue(`add: ${t}`, body);
@@ -671,7 +731,8 @@ function recompute() {
   SUM = DATA.tickers.map((tk) => {
     const rows = QIDX.get(tk.t) || [];
     const s = computeSummary(tk.t, rows, DATA.est[tk.t], DATA.price[tk.t], cfg, today);
-    s.name = tk.name; s.tier = tk.tier; s.industry = tk.industry; s.note = tk.note;
+    s.name = tk.name; s.tier = tk.tier; s.industry = tk.industry;
+    s.note = tk.note; s.tags = tk.tags || [];
     return s;
   });
   render();
@@ -695,6 +756,7 @@ async function boot() {
   $('#asof').textContent = `資料日期 ${DATA.generated || '—'}`;
   fillTierFilter($('#tier'), DATA.tickers);
   fillIndustryFilter($('#ind'), DATA.tickers);
+  fillTagFilter($('#tag'), DATA.tickers);
   fillDatalist('dl-tier', TIERS, DATA.tickers.map((t) => t.tier));
   fillDatalist('dl-ind', SECTORS.flatMap(([, l]) => l), DATA.tickers.map((t) => t.industry));
   recompute();
