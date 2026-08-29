@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """用 LibreOffice 把 xlsx 的公式算過一遍，把結果寫回檔案。
 
-openpyxl 只會把公式當「字串」寫進去，不附帶算好的值。桌機 Excel 開檔會自己
-重算，但線上預覽（Excel Online、Google 試算表、手機、Mac 預覽）不會算，
-就會整片空白。在 CI 先算一次，交付出去的檔案在哪開都有數字，公式也還在。
+為什麼需要這一步：openpyxl 只會把公式當「字串」寫進去，不會附帶算好的值。
+桌機版 Excel 開檔時會自己重算所以看得到數字，但線上預覽（Excel Online、
+Google 試算表、手機、Mac 預覽、GitHub）不會算，就會整片空白。
+在 CI 先算一次，交付出去的檔案在哪裡打開都有數字，公式也還在。
 """
 import subprocess
 import sys
@@ -37,7 +38,7 @@ def main():
                        capture_output=True, timeout=timeout, check=False)
         macro_dir = profile / "user" / "basic" / "Standard"
         if not macro_dir.exists():
-            print("✗ LibreOffice 沒建出設定檔，跳過重算（公式仍在，只是沒快取值）")
+            print("✗ LibreOffice 沒建出設定檔，跳過重算（公式仍在，只是沒有快取值）")
             return 0
         (macro_dir / "Module1.xba").write_text(MACRO)
 
@@ -65,7 +66,7 @@ def main():
         print(f"✗ 重算後有 {errs} 個公式錯誤（#REF!／#DIV/0! 之類），請檢查")
     else:
         print(f"✓ 已重算：{cells} 個有值的儲存格，0 個公式錯誤")
-    return 0   # 有錯也照樣往下走，避免整批資料因為一格錯誤而沒被 commit
+    return 0   # 就算有錯也照樣往下走，避免整批資料因為一格錯誤而沒被 commit
 
 
 if __name__ == "__main__":
