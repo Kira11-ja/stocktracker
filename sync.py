@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""增量同步：只抓缺的，抓完驗證，驗證過才寫回 master。"""
+"""增量同步：只抓缺的，抓完驗證，驗證過才寫回 master。
+
+三種情況（對應 _Manifest 分頁的「狀態」欄）：
+  1. 新標的            → 抓滿 target_quarters 季 + 季末股價 + 預估
+  2. 有資料但季數不足   → 只補缺的那幾季
+  3. 已滿季且財報未到   → 季度 API 整個跳過，只更新股價
+  4. 財報公布了        → 抓最新 1~2 季，把預估列翻成實際，並新增下一季預估列
+
+「第一次全部補齊」與「之後只補缺的」是同一段程式碼 —— 前者只是「缺口 = 全部」
+的特例。不寫成兩套，就不會有「第一次跑對了、增量跑錯了」這種難抓的 bug。
+"""
 import os, sys, argparse, datetime as dt
 from pathlib import Path
 
@@ -11,16 +21,20 @@ import sources
 
 ROOT = Path(__file__).parent
 DATA = ROOT / "data"
-MASTER = DATA / "master.csv"
+MASTER = DATA / "master.csv"          # 用 CSV 不用 parquet：git 可以 diff，
+                                      # 財報被重編時 git log 直接告訴你哪天變的
 
 RAW_Q_COLS = ["ticker", "period", "fy", "fq", "period_end", "is_est", "est_source",
               "eps_basis", "revenue", "gross_profit", "eps_diluted_adj",
               "shares_diluted", "total_equity", "dps", "price_at_end"]
+# seq / key 由這裡算好一起輸出，Excel 端就不需要任何公式欄，Power Query 可以直接載入。
+# 安全性：sync 每次都會重寫整份 master 並重新排序，所以補進新一季時 seq 一定是對的。
 OUT_COLS = RAW_Q_COLS + ["seq", "key"]
 
 
 def add_seq(df):
-    """seq：is_est="Y" 記為 0（當季預估）；實際季由新到舊排 1、2、3…"""
+    """seq：is_est="Y" 記為 0（當季預估）；實際季由新到舊排 1、2、3…
+    key：ticker|seq，給 Excel 端做文字型 INDEX/MATCH。"""
     if df.empty:
         out = df.copy()
         out["seq"] = []
@@ -41,6 +55,7 @@ def log(msg):
     print(msg, flush=True)
 
 
+# ───────────────────────── 缺口判斷 ─────────────────────────
 def plan(ticker, master, meta, cfg, today):
     have = master[master.ticker == ticker] if len(master) else master
     actual = have[have.is_est == "N"] if len(have) else have
@@ -58,6 +73,7 @@ def plan(ticker, master, meta, cfg, today):
                 why="財報可能已公布，抓最近幾季")
 
 
+# ───────────────────────── 瀑布抓取 ─────────────────────────
 def waterfall_fin(ticker, n, chain):
     """依序嘗試各來源，後面的只填前面缺的期別（不覆寫已有值）。"""
     out = sources.empty(sources.FIN_COLS)
@@ -77,13 +93,14 @@ def waterfall_fin(ticker, n, chain):
             out = df.copy()
         else:
             # 用 (fy, fq) 當鍵，不能用 period_end ——
-            # 不同來源給同一季的期末日會差好幾天（yfinance 給月底、SEC 給實際日），
+            # 不同來源給同一季的期末日會差好幾天（yfinance 給月底、SEC 給 52/53 週制實際日），
             # 用日期當鍵會讓同一季被當成兩季，歷史永遠補不滿。
             out = out.dropna(subset=["fy", "fq"]).drop_duplicates(subset=["fy", "fq"])
             df = df.dropna(subset=["fy", "fq"]).drop_duplicates(subset=["fy", "fq"])
             out = (out.set_index(["fy", "fq"])
                    .combine_first(df.set_index(["fy", "fq"]))
                    .reset_index())
+        # 每個數值欄都補滿了就不用再往下找
         if out[["revenue", "gross_profit", "shares_diluted",
                 "total_equity"]].notna().all().all() and len(out) >= n:
             break
@@ -135,7 +152,9 @@ def waterfall_eps(ticker, n, chain):
 
 
 def is_blank(v):
-    """型別安全的「空」判斷。pandas 物件不能直接丟給 and / if。"""
+    """型別安全的「空」判斷。
+    不能寫成 `v != {}` 或 `if v:` —— pandas 的 Series / DataFrame 會做逐元素比較，
+    再丟給 and / if 就會拋 'truth value of a Series is ambiguous'。"""
     if v is None:
         return True
     if isinstance(v, (pd.Series, pd.DataFrame, pd.Index)):
@@ -162,15 +181,16 @@ def first_of(chain, fname, *args):
     return None, None
 
 
-AMBIGUOUS_EST = {"yf"}   # yf 的 forwardEps 沒標明是哪個財年，只能當保底
+AMBIGUOUS_EST = {"yf"}   # yf 的 forwardEps 沒有標明是哪個財年，只能當保底
 
 
 def merged_estimates(chain, ticker):
-    """有標明期別的來源（yq / av）先填，yf 只補缺口。
+    """預估要跨來源合併（yq 有 0q 與家數、yf 只有 forwardEps 保底）。
 
-    yf 的 info["forwardEps"] 常常是「下一個財年」而不是本財年。
-    原本的寫法讓它先佔走 eps_f1，結果 eps_f1 == eps_f2（兩個都是下一年），
-    EPS成長_F ≈ 0 → 低於 PEG 門檻 → PEG_F 全部變 N/M。
+    重點：yf 的 info["forwardEps"] 其實常常是「下一個財年」而不是本財年，
+    如果讓它先佔走 eps_f1，就會出現 eps_f1 == eps_f2（都是下一年），
+    害 EPS成長_F ≈ 0 而 PEG_F 全部變成 N/M。
+    所以有標明期別的來源（yq / av）先填，yf 只在缺口時補。
     """
     labeled, fallback = {}, {}
     for src in chain:
@@ -200,6 +220,8 @@ def merged_estimates(chain, ticker):
         out["eps_f2"] = out["eps_f1"]
     return out
 
+
+# ───────────────────────── 組成 Raw_Q 列 ─────────────────────────
 def nearest_price(prices, when):
     if prices is None or len(prices) == 0:
         return np.nan
@@ -216,7 +238,8 @@ def align_eps(eps_df, ends):
       A. 期末日型（yahooquery earnings_history / AV EARNINGS 的 fiscalDateEnding）
          → 直接對期末日，容許 52/53 週制的幾天偏移。
       B. 公布日型（yfinance earnings_dates）→ index 是「財報公布日」，
-         通常比期末日晚 20~40 天。用 ±12 天比對會全部落空。
+         通常比期末日晚 20~40 天。用 ±12 天去比對會全部落空
+         （這就是 AAPL / MSFT / NVDA 整欄 EPS 空白的原因）。
          正確作法：把每筆公布值指派給「公布日之前最近的那個期末日」。
     """
     if eps_df is None or eps_df.empty:
@@ -236,9 +259,10 @@ def align_eps(eps_df, ends):
                 continue
             pe = max(prior)
         gap = abs((d - pe).days)
-        if pe not in out or gap < out[pe][1]:
+        if pe not in out or gap < out[pe][1]:      # 同一季多筆時取最接近的
             out[pe] = (float(v), gap)
     return {k: v[0] for k, v in out.items()}
+
 
 SPLIT_FACTORS = (2, 3, 4, 5, 6, 8, 10, 15, 20)
 
@@ -278,11 +302,15 @@ def fix_split_shares(rows):
 
 
 def build_rows(ticker, fin, eps, basis, divs, prices, cfg):
+    # combine_first 合併不同來源後，缺漏的期別會讓 fy / fq 變 NaN，int() 會炸。
     fin = fin.dropna(subset=["period_end", "fy", "fq"])
     fin = fin.sort_values("period_end", ascending=False)
     fin = fin.head(cfg["target_quarters"]).copy()
     ends = sorted(fin["period_end"].tolist(), reverse=True)
     epsmap = align_eps(eps, ends)
+
+    def eps_for(pe):
+        return epsmap.get(pe, np.nan)
 
     rows = []
     for _, r in fin.iterrows():
@@ -298,14 +326,14 @@ def build_rows(ticker, fin, eps, basis, divs, prices, cfg):
             fy=int(r.fy), fq=int(r.fq), period_end=pe,
             is_est="N", est_source="actual", eps_basis=basis,
             revenue=r.revenue, gross_profit=r.gross_profit,
-            eps_diluted_adj=epsmap.get(pe, np.nan),
-            shares_diluted=r.shares_diluted,
+            eps_diluted_adj=eps_for(pe), shares_diluted=r.shares_diluted,
             total_equity=r.total_equity, dps=dps,
             price_at_end=nearest_price(prices, pe)))
     return fix_split_shares(pd.DataFrame(rows, columns=RAW_Q_COLS))
 
 
 def estimate_row(ticker, actual_rows, est, basis):
+    """當季（尚未公布）的預估列 —— seq 會在 Excel 端算成 0。"""
     if actual_rows.empty or not est.get("eps_q0"):
         return sources.empty(RAW_Q_COLS)
     ok = actual_rows.dropna(subset=["fy", "fq"])
@@ -325,37 +353,65 @@ def estimate_row(ticker, actual_rows, est, basis):
         columns=RAW_Q_COLS)
 
 
-def validate(df, cfg):
-    errs = []
-    a = df[df.is_est == "N"]
-    dup = a.duplicated(subset=["ticker", "fy", "fq"]).sum()
-    if dup:
-        errs.append(f"{dup} 筆 (ticker, fy, fq) 重複")
-    bad = a[(a.revenue <= 0) | a.revenue.isna()]
+# ───────────────────────── 驗證 ─────────────────────────
+def sanitize(df):
+    """把「不可用」和「會算錯」的列處理掉，而不是把整批更新擋下來。
+
+    原本的作法是驗證不過就整份不寫入 —— 結果 MRVL 少一筆營收、
+    MU 歷史有個缺口，就把另外六檔正常的股票也一起卡住。太硬了。
+
+    三種問題，三種處理：
+      · 營收缺失或非正數 → 那一列什麼指標都撐不起來，直接丟掉
+      · 季度有缺口       → 只留「最新的連續一段」。因為所有指標都是用 seq
+                          （由新到舊的名次）去取區間，中間缺一季會讓 seq 5
+                          不再是去年同期，YoY 會靜靜地算錯。寧可歷史短一點
+      · 同一財季有兩列   → 期別換算出錯，會汙染 seq。這檔整個退回舊資料
+    """
+    notes, quarantine = [], set()
+    est = df[df.is_est == "Y"]
+    act = df[df.is_est == "N"].copy()
+
+    bad = act[act.revenue.isna() | (act.revenue <= 0)]
     if len(bad):
-        errs.append(f"{len(bad)} 筆 revenue 缺失或非正數："
-                    f"{bad[['ticker','period']].head(5).to_dict('records')}")
-    for tk, g in a.groupby("ticker"):
-        g = g.sort_values("period_end")
-        d = (g.fy * 4 + g.fq).diff().dropna()
-        if (d == 0).any():
-            errs.append(f"{tk} 有兩筆對到同一個財季")
-        big = d[d > 1]
-        if len(big):
-            errs.append(f"{tk} 季度有缺口，跳過了 {int(big.sum() - len(big))} 季")
-    warn = []
-    n_gaap = (df.eps_basis == "gaap").sum()
+        for r in bad.itertuples():
+            notes.append(f"{r.ticker} {r.period} 沒有營收，丟掉這一列")
+        act = act.drop(bad.index)
+
+    keep = []
+    for tk, g in act.groupby("ticker"):
+        g = g.sort_values("period_end", ascending=False)
+        idx = (g.fy * 4 + g.fq).tolist()
+        if len(set(idx)) != len(idx):
+            quarantine.add(tk)
+            notes.append(f"{tk} 有兩筆對到同一個財季，這次的資料整批退回")
+            continue
+        cut = len(g)
+        for i in range(1, len(idx)):
+            if idx[i - 1] - idx[i] != 1:      # 由新到舊，正常是每次減 1
+                cut = i
+                break
+        if cut < len(g):
+            notes.append(f"{tk} 第 {cut + 1} 季往前有缺口，只保留最近 {cut} 季"
+                         f"（保留缺口前的資料會讓 YoY 對錯季）")
+        keep.append(g.head(cut))
+
+    act = pd.concat(keep, ignore_index=True) if keep else act.iloc[0:0]
+    out = pd.concat([act, est[~est.ticker.isin(quarantine)]], ignore_index=True)
+
+    n_gaap = int((out.eps_basis == "gaap").sum())
     if n_gaap:
-        warn.append(f"{n_gaap} 筆 EPS 降級為 GAAP 口徑")
+        notes.append(f"{n_gaap} 筆 EPS 降級為 GAAP 口徑")
+    a = out[out.is_est == "N"]
     n_miss = int(a.eps_diluted_adj.isna().sum())
     if n_miss:
-        warn.append(f"{n_miss}/{len(a)} 季沒有對到 EPS")
-    return errs, warn
+        notes.append(f"{n_miss}/{len(a)} 季沒有對到 EPS")
+    return out, notes, quarantine
 
 
+# ───────────────────────── 主流程 ─────────────────────────
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--only", help="只跑指定代號（逗號分隔）")
+    ap.add_argument("--only", help="只跑指定代號（逗號分隔），用於除錯")
     ap.add_argument("--force-full", action="store_true", help="忽略快取，全部重抓")
     ap.add_argument("--dry-run", action="store_true", help="不寫檔，只印出計畫")
     args = ap.parse_args()
@@ -415,13 +471,15 @@ def main():
         eps, basis, esrc = waterfall_eps(tk, p["quarters"], chain)
         divs, dsrc = first_of(chain, "dividends", tk, None)
         rows = build_rows(tk, fin, eps, basis, divs, prices, cfg)
-        n_eps = int(rows.eps_diluted_adj.notna().sum())
+        n_eps = int(rows[rows.is_est == "N"].eps_diluted_adj.notna().sum())
+        n_act = int((rows.is_est == "N").sum())
         n_div = 0 if divs is None else len(divs)
-        log(f"      財報={'+'.join(used)} {len(rows)} 季 ｜ EPS={esrc}({basis}) "
-            f"對上 {n_eps}/{len(rows)} ｜ 股利 {n_div} 筆（{dsrc or '無'}）")
+        log(f"      EPS 對上 {n_eps}/{n_act} 季 ｜ 股利事件 {n_div} 筆 "
+            f"（{dsrc or '無'}）｜ 股價 {0 if prices is None else len(prices)} 筆")
         rows = pd.concat([rows, estimate_row(tk, rows, est, basis)], ignore_index=True)
         all_new.append(rows)
         calls += len(used) + 2
+        log(f"      財報={'+'.join(used)}  EPS={esrc}({basis})  {len(rows)} 列")
 
     if args.dry_run:
         log("\n(dry-run，未寫檔)")
@@ -429,33 +487,46 @@ def main():
 
     if all_new:
         new = pd.concat(all_new, ignore_index=True)
+        keys = ["ticker", "fy", "fq"]
+        # 新的原則上覆蓋舊的（財報會被追溯重編），但有一個例外：
+        # 這次抓回來是空的、master 裡原本卻有值，那就是來源當下的一次性缺漏，
+        # 不能讓它把好資料洗掉。這種洞會一路傳染 —— 少一季就變成缺口，
+        # 缺口前面的歷史又會被整段截掉。
+        if len(master):
+            usable = master.revenue.notna() & (master.revenue > 0)
+            have_good = set(map(tuple, master.loc[usable, keys].values))
+            hollow = new.revenue.isna() | (new.revenue <= 0)
+            clash = [tuple(v) in have_good for v in new[keys].values]
+            drop = new[hollow & pd.Series(clash, index=new.index)]
+            if len(drop):
+                for r in drop.itertuples():
+                    log(f"      ⚠ {r.ticker} {r.period} 這次抓到空的，沿用既有資料")
+                new = new.drop(drop.index)
         master = (pd.concat([new, master], ignore_index=True)
-                  .drop_duplicates(subset=["ticker", "fy", "fq"], keep="first"))
+                  .drop_duplicates(subset=keys, keep="first"))   # 新的覆蓋舊的
     master = master.sort_values(["ticker", "period_end"], ascending=[True, False])
 
-    errs, warn = validate(master, cfg)
-    for w in warn:
-        log(f"  ⚠ {w}")
-    if errs:
-        log("\n✗ 驗證未通過，master 未更新：")
-        for e in errs:
-            log(f"    - {e}")
+    before = len(master)
+    prev = pd.read_csv(MASTER) if MASTER.exists() else None
+    master, notes, quarantine = sanitize(master)
+    for n in notes:
+        log(f"  ⚠ {n}")
+    if quarantine and prev is not None:
+        # 被隔離的股票沿用上一版的資料，不要因為這次抓壞就整檔消失
+        old = prev[prev.ticker.isin(quarantine)]
+        if len(old):
+            old["period_end"] = pd.to_datetime(old["period_end"]).dt.date
+            master = pd.concat([master, old], ignore_index=True)
+            log(f"  ⚠ {'、'.join(sorted(quarantine))} 沿用上一版資料")
+    if len(master) < before:
+        log(f"  ⚠ 共清掉 {before - len(master)} 列有問題的資料")
+    if master.empty:
+        log("\n✗ 清理後沒有任何資料可寫，master 保持原狀")
         return 1
 
     def keep_others(new_rows, path):
-        """--only 只跑部分股票時，沒跑到的那些要沿用舊資料，不能被整份蓋掉。"""
-        new = pd.DataFrame(new_rows)
-        if path.exists():
-            old = pd.read_csv(path)
-            if len(new) and "ticker" in old.columns:
-                old = old[~old.ticker.isin(new.ticker)]
-            new = pd.concat([new, old], ignore_index=True)
-        return new.sort_values("ticker") if "ticker" in new.columns else new
-
-
-
-    def keep_others(new_rows, path):
-        """--only 只跑部分股票時，沒跑到的那些要沿用舊資料，不能被整份蓋掉。"""
+        """--only 只跑部分股票時，沒跑到的那些要沿用舊資料，不能被整份蓋掉。
+        （master 本來就是合併的，但 meta / est / price 原本是直接覆寫。）"""
         new = pd.DataFrame(new_rows)
         if path.exists():
             old = pd.read_csv(path)
@@ -471,9 +542,8 @@ def main():
     keep_others(price_rows, DATA / "raw_price.csv").to_csv(DATA / "raw_price.csv", index=False)
     # tickers.csv 要寫「完整的那份」，不是被 --only 篩過的
     pd.read_csv(ROOT / "tickers.csv").to_csv(DATA / "tickers.csv", index=False)
-
-
-
+    log(f"\n✓ 完成：{master.ticker.nunique()} 檔 / {len(master)} 列 / 約 {calls} 次 API 呼叫")
+    return 0
 
 
 if __name__ == "__main__":
