@@ -1,28 +1,26 @@
-name: update-stock-data
+name: add-ticker
 
+# 網頁上的「＋新增股票」／「移除這檔」會開一張 Issue，這個流程負責處理它。
+# 只認 repo 擁有者開的 Issue —— 公開 repo 誰都能開 Issue，
+# 沒有這道檢查等於讓任何人改你的觀察清單、燒你的 API 額度。
 on:
-  schedule:
-    # UTC 23:00 = 台灣早上 07:00（美股收盤後約 2 小時），週一到週五
-    - cron: '0 23 * * 1-5'
-  workflow_dispatch:
-    inputs:
-      only:
-        description: '只跑這幾檔（逗號分隔，留空＝全部）'
-        required: false
-      force_full:
-        description: '忽略快取全部重抓（true / false）'
-        required: false
-        default: 'false'
+  issues:
+    types: [opened]
 
 permissions:
   contents: write
+  issues: write
 
+# 每張 Issue 自成一組。共用一組的話，同時開兩三張 Issue 會有人被
+# 「higher priority waiting request」擠掉——同一組只准一個在跑、一個在等，
+# 第三個會被取消。推送衝突交給下面的 Commit 步驟自己重試處理。
 concurrency:
-  group: stock-data
+  group: add-ticker-${{ github.event.issue.number }}
   cancel-in-progress: false
 
 jobs:
-  sync:
+  handle:
+    if: github.event.issue.user.login == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -35,29 +33,32 @@ jobs:
 
       - run: pip install -r requirements.txt
 
+      - name: Parse issue
+        run: python add_ticker.py
+
+      # 只有新增才需要去外面抓資料。移除與改等級都只動 tickers.csv，
+      # add_ticker.py 已經把 data/ 一起處理好了，重建就行，省掉三到五分鐘。
       - name: Sync
+        if: success() && env.ACTION == 'add'
         env:
           AV_API_KEY: ${{ secrets.AV_API_KEY }}
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
-          ONLY: ${{ inputs.only }}
-          FORCE_FULL: ${{ inputs.force_full }}
-        run: |
-          ARGS=""
-          if [ -n "$ONLY" ]; then ARGS="$ARGS --only $ONLY"; fi
-          if [ "$FORCE_FULL" = "true" ]; then ARGS="$ARGS --force-full"; fi
-          echo "執行：python sync.py $ARGS"
-          python sync.py $ARGS
+        run: python sync.py
 
       - name: Classify
+        if: success() && env.ACTION == 'add'
         run: python classify.py
 
       - name: Build web data
+        if: success() && env.ACTION != 'none'
         run: python export_json.py
 
       - name: Build Excel
+        if: success() && env.ACTION != 'none'
         run: python build_xlsx.py
 
       - name: Recalculate formulas
+        if: success() && env.ACTION != 'none'
         run: |
           if ! command -v soffice >/dev/null; then
             sudo apt-get update -qq
@@ -66,19 +67,20 @@ jobs:
           python recalc_xlsx.py "美股觀察表.xlsx"
 
       - name: Commit
+        if: success() && env.ACTION != 'none'
         env:
           BRANCH: ${{ github.ref_name }}
         run: |
           git config user.name  "stock-tracker-bot"
           git config user.email "bot@users.noreply.github.com"
-          git add -A data/ docs/ "美股觀察表.xlsx"
+          git add -A data/ docs/ tickers.csv "美股觀察表.xlsx"
           # 注意：`git diff --quiet || cmd` 在 bash -e 底下，
           # 「沒有變更」那條路會讓整個步驟以 1 結束。要用 if。
           if git diff --staged --quiet; then
             echo "沒有任何變更，不需要 commit"
             exit 0
           fi
-          git commit -m "data: $(date -u +%F)"
+          git commit -m "${ACTION}: ${TICKER}"
           # 這段期間 main 可能已經前進（你在網頁上改了檔案、或另一個流程剛推完），
           # 直接 push 會被拒。先試乾淨的合併——多數情況雙方改的檔案不重疊，
           # 這樣兩邊的東西都會留著。真的撞在同一行才退而求其次用這次的版本，
@@ -97,3 +99,18 @@ jobs:
           done
           echo "::error::連續三次推不上去，請看 Actions 是否有其他流程同時在寫入"
           exit 1
+
+      - name: Reply and close
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUM: ${{ github.event.issue.number }}
+          STATUS: ${{ job.status }}
+        run: |
+          if [ "$STATUS" != "success" ]; then
+            gh issue comment "$NUM" --body \
+              "⚠️ 這次沒有處理成功（${STATUS}），清單沒有被更動。請看 Actions 的紀錄。修好之後把這張 Issue 關掉重開一張就會再跑一次。"
+            exit 0
+          fi
+          gh issue comment "$NUM" --body "${RESULT:-已處理完成。}"
+          gh issue close "$NUM"
