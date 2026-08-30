@@ -48,6 +48,9 @@ jobs:
           echo "執行：python sync.py $ARGS"
           python sync.py $ARGS
 
+      - name: Classify
+        run: python classify.py
+
       - name: Build web data
         run: python export_json.py
 
