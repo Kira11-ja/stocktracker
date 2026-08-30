@@ -45,6 +45,10 @@ jobs:
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
         run: python sync.py
 
+      - name: Classify
+        if: success() && env.ACTION == 'add'
+        run: python classify.py
+
       - name: Build web data
         if: success() && env.ACTION != 'none'
         run: python export_json.py
