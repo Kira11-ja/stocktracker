@@ -139,9 +139,13 @@ def main():
         print("找不到 tickers.csv")
         return 0
     df = pd.read_csv(TICKERS)
-    for c in ("company", "sector"):
+    # 整欄都空的 CSV 欄位會被 pandas 讀成 float64（全是 NaN），
+    # 之後往裡面塞字串會噴 TypeError: Invalid value 'Apple Inc.' for dtype 'float64'。
+    # 先統一轉成字串欄位，NaN 變空字串。
+    for c in ("company", "sector", "tier", "note", "tags"):
         if c not in df.columns:
             df[c] = ""
+        df[c] = df[c].fillna("").astype(str)
 
     changed, unmapped = 0, []
     for i, r in df.iterrows():
@@ -187,4 +191,13 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # 分類只是錦上添花。真的出事就印出來、往下走，
+    # 不要因為它讓整趟同步白跑（前面已經打過幾十次 API 了）。
+    try:
+        sys.exit(main())
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"\n::warning::classify.py 出錯（{e}），略過分類繼續跑。"
+              f"產業會留空白，可以在網頁上自己選。")
+        sys.exit(0)
