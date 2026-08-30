@@ -196,7 +196,7 @@ code{background:var(--chip);padding:1px 5px;border-radius:4px;font-size:12px}
     </div>
 
     <div class="frow">
-      <label>產業<span class="hint">同產業才好互相比較</span></label>
+      <label>產業<span class="hint">同產業才好互相比較。選「自動判斷」就交給 GitHub</span></label>
       <div class="ctl">
         <select id="e-ind-sel"></select>
         <input id="e-ind-txt" type="text" placeholder="自己打一個產業" hidden>
@@ -226,7 +226,8 @@ code{background:var(--chip);padding:1px 5px;border-radius:4px;font-size:12px}
   <div class="dlg-body">
     <h3>新增股票</h3>
     <p>送出後會幫你在 GitHub 開一張 Issue，GitHub 收到就會自動把代號寫進
-       <code>tickers.csv</code>、抓齊歷史資料、更新這個網頁。大約 3～6 分鐘。</p>
+       <code>tickers.csv</code>、抓齊歷史資料、更新這個網頁。大約 3～6 分鐘。<br>
+       <b>公司名稱和產業會自動判斷</b>，你只要填自己的分類。</p>
 
     <div class="frow">
       <label>股票代號</label>
@@ -244,21 +245,11 @@ code{background:var(--chip);padding:1px 5px;border-radius:4px;font-size:12px}
     </div>
 
     <div class="frow">
-      <label>產業</label>
+      <label>標籤<span class="hint">題材，用頓號或逗號分隔</span></label>
       <div class="ctl">
-        <select id="a-ind-sel"></select>
-        <input id="a-ind-txt" type="text" placeholder="自己打一個產業" hidden>
+        <input id="a-tags" type="text" placeholder="例：CPO、AI">
+        <div id="a-tagpool" class="tags"></div>
       </div>
-    </div>
-
-    <div class="frow">
-      <label>標籤<span class="hint">用頓號或逗號分隔</span></label>
-      <div class="ctl"><input id="a-tags" type="text" placeholder="例：CPO、AI"></div>
-    </div>
-
-    <div class="frow">
-      <label>公司名稱<span class="hint">留空會自動抓</span></label>
-      <div class="ctl"><input id="a-name" type="text" placeholder="留空即可"></div>
     </div>
 
     <div class="frow">
@@ -385,10 +376,15 @@ let DATA = null, SUM = [], sortKey = 't', sortDir = 1, selected = null;
    最後多一個「＋ 自己打…」，選了才換成輸入框。 */
 const CUSTOM = '__custom__';
 
-function setupPick(base, groups, used, value) {
+function setupPick(base, groups, used, value, top) {
   const sel = $('#' + base + '-sel'), txt = $('#' + base + '-txt');
   sel.innerHTML = '';
   const listed = new Set();
+  // top＝擺在最前面的特殊選項，例如「自動判斷」。它的 value 是真的會送出去的值。
+  if (top) {
+    const o = el('option', null, top[0]); o.value = top[1];
+    sel.appendChild(o); listed.add(top[1]);
+  }
   const addOpt = (parent, v) => {
     if (listed.has(v)) return;
     listed.add(v);
@@ -470,6 +466,20 @@ function fillTagFilter(sel, tickers) {
     const o = el('option', null, `${g}（${n}）`); o.value = g; sel.appendChild(o);
   }
   sel.value = cur;
+}
+
+/* 「點一下加入」的既有標籤列。新增與編輯兩個視窗共用。 */
+function fillTagPool(poolId, inputId) {
+  const pool = $('#' + poolId);
+  pool.innerHTML = '';
+  const known = [...new Set(SUM.flatMap((x) => x.tags || []))].sort();
+  if (!known.length) return;
+  pool.appendChild(el('span', 'hint', '點一下加入：'));
+  pool.appendChild(tagChips(known, (g) => {
+    const cur = $('#' + inputId).value.split(/[、,，;；]+/).map((x) => x.trim()).filter(Boolean);
+    const next = cur.includes(g) ? cur.filter((x) => x !== g) : [...cur, g];
+    $('#' + inputId).value = next.join('、');
+  }));
 }
 
 function tagChips(list, onPick) {
@@ -628,18 +638,10 @@ function renderDetail(t) {
   ed.onclick = () => {
     $('#e-t').textContent = t;
     setupPick('e-tier', [['', TIERS]], SUM.map((x) => x.tier), s.tier || '池子');
-    setupPick('e-ind', SECTORS, SUM.map((x) => x.industry), s.industry || '未分類');
+    setupPick('e-ind', SECTORS, SUM.map((x) => x.industry), s.industry || '未分類',
+      ['自動判斷（下次更新時由 GitHub 填）', '未分類']);
     $('#e-tags').value = (s.tags || []).join('、');
-    const pool = $('#e-tagpool'); pool.innerHTML = '';
-    const known = [...new Set(SUM.flatMap((x) => x.tags || []))].sort();
-    if (known.length) {
-      pool.appendChild(el('span', 'hint', '點一下加入：'));
-      pool.appendChild(tagChips(known, (g) => {
-        const cur = $('#e-tags').value.split(/[、,，;；]+/).map((x) => x.trim()).filter(Boolean);
-        const next = cur.includes(g) ? cur.filter((x) => x !== g) : [...cur, g];
-        $('#e-tags').value = next.join('、');
-      }));
-    }
+    fillTagPool('e-tagpool', 'e-tags');
     $('#e-note').value = s.note || '';
     $('#dlg-edit').dataset.t = t;
     $('#dlg-edit').showModal();
@@ -798,19 +800,18 @@ $('#edit-go').onclick = () => {
 };
 
 $('#btn-add').onclick = () => {
-  $('#a-t').value = ''; $('#a-note').value = ''; $('#a-name').value = ''; $('#a-tags').value = '';
+  $('#a-t').value = ''; $('#a-note').value = ''; $('#a-tags').value = '';
   setupPick('a-tier', [['', TIERS]], SUM.map((x) => x.tier), '池子');
-  setupPick('a-ind', SECTORS, SUM.map((x) => x.industry), '未分類');
+  fillTagPool('a-tagpool', 'a-tags');
   $('#dlg-add').showModal();
 };
 $('#add-close').onclick = () => $('#dlg-add').close();
 $('#add-go').onclick = () => {
   const t = $('#a-t').value.trim().toUpperCase();
   if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(t)) { alert('代號看起來不像美股代號，請確認。'); return; }
+  // 不送 industry / name —— 留白讓 classify.py 自己判斷
   const body = [`ticker: ${t}`, `tier: ${pickValue('a-tier')}`,
-    `industry: ${pickValue('a-ind')}`,
-    `tags: ${$('#a-tags').value.trim()}`,
-    `name: ${$('#a-name').value.trim()}`, `note: ${$('#a-note').value.trim()}`,
+    `tags: ${$('#a-tags').value.trim()}`, `note: ${$('#a-note').value.trim()}`,
     '', '（這張 Issue 由觀察表網頁自動產生，GitHub 處理完會自己關閉。）'].join('\n');
   openIssue(`add: ${t}`, body);
   $('#dlg-add').close();
