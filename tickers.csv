@@ -1,8 +1,9 @@
 ticker,公司名稱,產業,等級,加入日期,備註,company,sector,tier,added,note,tags
-AAPL,Apple Inc.,資訊科技硬體,核心,2025-03-11,服務業務佔比是觀察重點,,,,,,
-MSFT,Microsoft Corp.,軟體,核心,2025-03-11,Azure 成長率,,,,,,
-NVDA,NVIDIA Corp.,半導體,觀察,2026-01-04,成長減速中,,,,,,
-COST,Costco Wholesale,量販與超市,觀察,2026-01-04,低毛利高週轉,,,,,,
-ADBE,Adobe Inc.,軟體,池子,2026-06-02,,,,,,,
-AAOI,,,,,,,未分類,觀察,2026-08-29,,CPO
-MRVL,,,,,,,未分類,池子,2026-08-30,,
+AAPL,Apple Inc.,資訊科技硬體,核心,2025-03-11,服務業務佔比是觀察重點,Apple Inc.,資訊科技硬體,,,,
+MSFT,Microsoft Corp.,軟體,核心,2025-03-11,Azure 成長率,Microsoft Corporation,軟體,,,,
+NVDA,NVIDIA Corp.,半導體,觀察,2026-01-04,成長減速中,NVIDIA Corporation,半導體,,,,
+COST,Costco Wholesale,量販與超市,觀察,2026-01-04,低毛利高週轉,Costco Wholesale Corporation,量販與超市,,,,
+ADBE,Adobe Inc.,軟體,池子,2026-06-02,,Adobe Inc.,軟體,,,,
+AAOI,,,,,,"Applied Optoelectronics, Inc.",資訊科技硬體,觀察,2026-08-29,,CPO
+MRVL,,,,,,"Marvell Technology, Inc.",半導體,池子,2026-08-30,,
+MU,,,,,,"Micron Technology, Inc.",半導體,池子,2026-08-30,,
