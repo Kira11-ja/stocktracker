@@ -94,10 +94,24 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 .dlg-body h3{margin:0 0 4px;font-size:15px}
 .dlg-body p{margin:0 0 14px;color:var(--dim);font-size:12.5px}
 .row{display:flex;align-items:center;gap:10px;margin-bottom:10px}
-.row label{flex:1;font-size:13px}
+.row label{flex:1 1 auto;min-width:132px;font-size:13px}
 .row .hint{display:block;color:var(--faint);font-size:11.5px;font-weight:400}
-.row input,.row select{width:120px;text-align:right}
-.row input[type=text]{text-align:left;width:100%}
+.row input[type=number]{width:120px;text-align:right;flex:none}
+.row select{flex:0 1 200px;min-width:120px}
+.row input[type=text]{flex:1 1 200px;min-width:0;text-align:left}
+.row.wide{display:block}
+.row.wide input[type=text]{width:100%}
+.pick{display:flex;gap:6px;flex:1 1 260px;min-width:0}
+.pick select{flex:1 1 auto}
+.pick input{flex:1 1 auto;min-width:0}
+.frow{display:grid;grid-template-columns:96px 1fr;gap:12px;
+  align-items:start;margin-bottom:12px}
+.frow > label{font-size:13px;padding-top:7px;line-height:1.35}
+.frow > label .hint{display:block;color:var(--faint);font-size:11.5px;
+  font-weight:400;padding-top:2px}
+.frow > .ctl{display:flex;flex-direction:column;gap:6px;min-width:0}
+.frow input,.frow select{width:100%;text-align:left}
+@media(max-width:520px){.frow{grid-template-columns:1fr}.frow > label{padding-top:0}}
 .dlg-foot{display:flex;gap:8px;justify-content:flex-end;padding:12px 16px;
   border-top:1px solid var(--line)}
 .empty{padding:40px 16px;text-align:center;color:var(--dim)}
@@ -159,7 +173,7 @@ code{background:var(--chip);padding:1px 5px;border-radius:4px;font-size:12px}
       <input id="c-ys" type="number" step="1" min="2" max="10"></div>
     <div class="row"><label>GitHub Repo
       <span class="hint">新增／移除股票要用，格式 帳號/repo。留空會自動偵測</span></label></div>
-    <div class="row"><input id="c-repo" type="text" placeholder="例：kira/stock-tracker"></div>
+    <div class="row wide"><input id="c-repo" type="text" placeholder="例：kira/stock-tracker"></div>
   </div>
   <div class="dlg-foot">
     <button id="cfg-reset">恢復預設</button>
@@ -167,23 +181,40 @@ code{background:var(--chip);padding:1px 5px;border-radius:4px;font-size:12px}
   </div>
 </dialog>
 
-<datalist id="dl-tier"></datalist>
-<datalist id="dl-ind"></datalist>
-
 <dialog id="dlg-edit">
   <div class="dlg-body">
     <h3>編輯 <span id="e-t"></span></h3>
-    <p>等級和備註只是你自己貼的標籤，不影響任何指標計算——只用來篩選和分組。
+    <p>等級、產業、標籤都只是你自己貼的標籤，不影響任何指標計算——只用來篩選和分組。
        送出後同樣是開一張 Issue，因為不用重抓資料，大約一分鐘就會生效。</p>
-    <div class="row"><label>等級<span class="hint">可以直接打新的，不限這三個</span></label>
-      <input id="e-tier" list="dl-tier" autocomplete="off"></div>
-    <div class="row"><label>產業<span class="hint">同產業才好互相比較。也可以自己打</span></label>
-      <input id="e-ind" list="dl-ind" autocomplete="off"></div>
-    <div class="row"><label>標籤<span class="hint">題材可以貼好幾個，用頓號或逗號分隔。最多 6 個</span></label></div>
-    <div class="row"><input id="e-tags" type="text" placeholder="例：CPO、AI、資料中心"></div>
-    <div class="row" id="e-tagpool" style="flex-wrap:wrap;gap:6px"></div>
-    <div class="row"><label>備註</label></div>
-    <div class="row"><input id="e-note" type="text" placeholder="想追蹤的重點"></div>
+
+    <div class="frow">
+      <label>等級</label>
+      <div class="ctl">
+        <select id="e-tier-sel"></select>
+        <input id="e-tier-txt" type="text" placeholder="自己打一個等級" hidden>
+      </div>
+    </div>
+
+    <div class="frow">
+      <label>產業<span class="hint">同產業才好互相比較</span></label>
+      <div class="ctl">
+        <select id="e-ind-sel"></select>
+        <input id="e-ind-txt" type="text" placeholder="自己打一個產業" hidden>
+      </div>
+    </div>
+
+    <div class="frow">
+      <label>標籤<span class="hint">題材，可多貼，最多 6 個</span></label>
+      <div class="ctl">
+        <input id="e-tags" type="text" placeholder="例：CPO、AI、資料中心">
+        <div id="e-tagpool" class="tags"></div>
+      </div>
+    </div>
+
+    <div class="frow">
+      <label>備註</label>
+      <div class="ctl"><input id="e-note" type="text" placeholder="想追蹤的重點"></div>
+    </div>
   </div>
   <div class="dlg-foot">
     <button id="edit-close">取消</button>
@@ -196,18 +227,44 @@ code{background:var(--chip);padding:1px 5px;border-radius:4px;font-size:12px}
     <h3>新增股票</h3>
     <p>送出後會幫你在 GitHub 開一張 Issue，GitHub 收到就會自動把代號寫進
        <code>tickers.csv</code>、抓齊歷史資料、更新這個網頁。大約 3～6 分鐘。</p>
-    <div class="row"><label>股票代號</label>
-      <input id="a-t" type="text" placeholder="NVDA" style="text-transform:uppercase"></div>
-    <div class="row"><label>等級<span class="hint">可以直接打新的</span></label>
-      <input id="a-tier" list="dl-tier" autocomplete="off" value="池子"></div>
-    <div class="row"><label>產業<span class="hint">可以直接打新的</span></label>
-      <input id="a-ind" list="dl-ind" autocomplete="off"></div>
-    <div class="row"><label>公司名稱<span class="hint">留空會自動抓</span></label></div>
-    <div class="row"><input id="a-name" type="text" placeholder="留空即可"></div>
-    <div class="row"><label>標籤<span class="hint">用頓號或逗號分隔</span></label></div>
-    <div class="row"><input id="a-tags" type="text" placeholder="例：CPO、AI"></div>
-    <div class="row"><label>備註</label></div>
-    <div class="row"><input id="a-note" type="text" placeholder="想追蹤的重點"></div>
+
+    <div class="frow">
+      <label>股票代號</label>
+      <div class="ctl">
+        <input id="a-t" type="text" placeholder="NVDA" style="text-transform:uppercase">
+      </div>
+    </div>
+
+    <div class="frow">
+      <label>等級</label>
+      <div class="ctl">
+        <select id="a-tier-sel"></select>
+        <input id="a-tier-txt" type="text" placeholder="自己打一個等級" hidden>
+      </div>
+    </div>
+
+    <div class="frow">
+      <label>產業</label>
+      <div class="ctl">
+        <select id="a-ind-sel"></select>
+        <input id="a-ind-txt" type="text" placeholder="自己打一個產業" hidden>
+      </div>
+    </div>
+
+    <div class="frow">
+      <label>標籤<span class="hint">用頓號或逗號分隔</span></label>
+      <div class="ctl"><input id="a-tags" type="text" placeholder="例：CPO、AI"></div>
+    </div>
+
+    <div class="frow">
+      <label>公司名稱<span class="hint">留空會自動抓</span></label>
+      <div class="ctl"><input id="a-name" type="text" placeholder="留空即可"></div>
+    </div>
+
+    <div class="frow">
+      <label>備註</label>
+      <div class="ctl"><input id="a-note" type="text" placeholder="想追蹤的重點"></div>
+    </div>
   </div>
   <div class="dlg-foot">
     <button id="add-close">取消</button>
@@ -322,15 +379,47 @@ const COLS = [
 
 let DATA = null, SUM = [], sortKey = 't', sortDir = 1, selected = null;
 
-/* 下拉清單 —— 建議值 ∪ 你實際用過的值。
-   等級和產業都是可以自己打的自由文字，這裡只是幫你少打幾個字。 */
-function fillDatalist(id, base, used) {
-  const dl = document.getElementById(id);
-  dl.innerHTML = '';
-  const { extra } = withCustom(base, used);
-  for (const v of [...base, ...extra]) {
-    const o = el('option'); o.value = v; dl.appendChild(o);
+/* 「選單 + 自己打」的欄位。
+   之前用 <input list=datalist>，但瀏覽器會拿欄位裡既有的字去過濾選項——
+   欄位是「池子」時就只剩「池子」一項，等於看不到別的。改成真的 select，
+   最後多一個「＋ 自己打…」，選了才換成輸入框。 */
+const CUSTOM = '__custom__';
+
+function setupPick(base, groups, used, value) {
+  const sel = $('#' + base + '-sel'), txt = $('#' + base + '-txt');
+  sel.innerHTML = '';
+  const listed = new Set();
+  const addOpt = (parent, v) => {
+    if (listed.has(v)) return;
+    listed.add(v);
+    const o = el('option', null, v); o.value = v; parent.appendChild(o);
+  };
+  for (const [label, list] of groups) {
+    if (groups.length === 1 && !label) { for (const v of list) addOpt(sel, v); continue; }
+    const g = el('optgroup'); g.label = label;
+    for (const v of list) addOpt(g, v);
+    sel.appendChild(g);
   }
+  const extra = [...new Set(used)].filter((v) => v && !listed.has(v)).sort();
+  if (value && !listed.has(value) && !extra.includes(value)) extra.push(value);
+  if (extra.length) {
+    const g = el('optgroup'); g.label = '自訂';
+    for (const v of extra) addOpt(g, v);
+    sel.appendChild(g);
+  }
+  const c = el('option', null, '＋ 自己打…'); c.value = CUSTOM; sel.appendChild(c);
+
+  sel.value = (value && listed.has(value)) ? value : sel.options[0].value;
+  txt.hidden = true; txt.value = '';
+  sel.onchange = () => {
+    txt.hidden = sel.value !== CUSTOM;
+    if (!txt.hidden) { txt.value = ''; txt.focus(); }
+  };
+}
+
+function pickValue(base) {
+  const sel = $('#' + base + '-sel'), txt = $('#' + base + '-txt');
+  return sel.value === CUSTOM ? txt.value.trim() : sel.value;
 }
 
 function fillTierFilter(sel, tickers) {
@@ -538,8 +627,8 @@ function renderDetail(t) {
   const ed = el('button', null, '編輯');
   ed.onclick = () => {
     $('#e-t').textContent = t;
-    $('#e-tier').value = s.tier || '池子';
-    $('#e-ind').value = s.industry || '';
+    setupPick('e-tier', [['', TIERS]], SUM.map((x) => x.tier), s.tier || '池子');
+    setupPick('e-ind', SECTORS, SUM.map((x) => x.industry), s.industry || '未分類');
     $('#e-tags').value = (s.tags || []).join('、');
     const pool = $('#e-tagpool'); pool.innerHTML = '';
     const known = [...new Set(SUM.flatMap((x) => x.tags || []))].sort();
@@ -701,21 +790,25 @@ $('#cfg-reset').onclick = () => {
 $('#edit-close').onclick = () => $('#dlg-edit').close();
 $('#edit-go').onclick = () => {
   const t = $('#dlg-edit').dataset.t;
-  const body = [`tier: ${$('#e-tier').value}`, `industry: ${$('#e-ind').value}`,
+  const body = [`tier: ${pickValue('e-tier')}`, `industry: ${pickValue('e-ind')}`,
     `tags: ${$('#e-tags').value.trim()}`, `note: ${$('#e-note').value.trim()}`,
     '', '（這張 Issue 由觀察表網頁自動產生，GitHub 處理完會自己關閉。）'].join('\n');
   openIssue(`edit: ${t}`, body);
   $('#dlg-edit').close();
 };
 
-$('#btn-add').onclick = () => { $('#a-t').value = ''; $('#a-note').value = '';
-  $('#a-name').value = ''; $('#a-tags').value = ''; $('#dlg-add').showModal(); };
+$('#btn-add').onclick = () => {
+  $('#a-t').value = ''; $('#a-note').value = ''; $('#a-name').value = ''; $('#a-tags').value = '';
+  setupPick('a-tier', [['', TIERS]], SUM.map((x) => x.tier), '池子');
+  setupPick('a-ind', SECTORS, SUM.map((x) => x.industry), '未分類');
+  $('#dlg-add').showModal();
+};
 $('#add-close').onclick = () => $('#dlg-add').close();
 $('#add-go').onclick = () => {
   const t = $('#a-t').value.trim().toUpperCase();
   if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(t)) { alert('代號看起來不像美股代號，請確認。'); return; }
-  const body = [`ticker: ${t}`, `tier: ${$('#a-tier').value}`,
-    `industry: ${$('#a-ind').value}`,
+  const body = [`ticker: ${t}`, `tier: ${pickValue('a-tier')}`,
+    `industry: ${pickValue('a-ind')}`,
     `tags: ${$('#a-tags').value.trim()}`,
     `name: ${$('#a-name').value.trim()}`, `note: ${$('#a-note').value.trim()}`,
     '', '（這張 Issue 由觀察表網頁自動產生，GitHub 處理完會自己關閉。）'].join('\n');
@@ -757,8 +850,6 @@ async function boot() {
   fillTierFilter($('#tier'), DATA.tickers);
   fillIndustryFilter($('#ind'), DATA.tickers);
   fillTagFilter($('#tag'), DATA.tickers);
-  fillDatalist('dl-tier', TIERS, DATA.tickers.map((t) => t.tier));
-  fillDatalist('dl-ind', SECTORS.flatMap(([, l]) => l), DATA.tickers.map((t) => t.industry));
   recompute();
 }
 boot();
