@@ -65,7 +65,7 @@ def plan(ticker, master, meta, cfg, today):
     if len(actual) < target:
         return dict(mode="backfill", quarters=target,
                     why=f"季數不足（{len(actual)}/{target}），補歷史")
-    ner = meta.get(ticker, {}).get("next_earnings")
+    ner = as_date(meta.get(ticker, {}).get("next_earnings"))
     if ner and today <= ner + dt.timedelta(days=cfg["report_lag_days"]):
         return dict(mode="price_only", quarters=0,
                     why=f"財報日 {ner} 未到，跳過季度資料")
@@ -149,6 +149,29 @@ def waterfall_eps(ticker, n, chain):
             log(f"      ⚠ {ticker} 取不到街頭口徑 EPS，降級為 GAAP")
             return df, "gaap", src.name
     return sources.empty(sources.EPS_COLS), "street", None
+
+
+def as_date(v):
+    """把「沒有日期」統一成 None。
+
+    pandas 的 NaT 是 truthy —— `if ner and today <= ner` 會通過第一關，
+    然後在比較時炸成 TypeError: Cannot compare NaT with datetime.date。
+    只要有一檔股票抓不到下次財報日，meta.csv 就會存下空值，
+    隔天整趟同步全部掛掉。
+    """
+    if v is None:
+        return None
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass
+    # Timestamp 是 datetime 的子類、datetime 又是 date 的子類，
+    # 所以 datetime 那一關要先擋，否則會原封不動回傳，
+    # 之後拿去跟 date 比較一樣會炸。
+    if isinstance(v, dt.datetime):
+        return v.date()
+    return v if isinstance(v, dt.date) else None
 
 
 def is_blank(v):
@@ -435,15 +458,19 @@ def main():
     meta_path = DATA / "meta.csv"
     meta_df = pd.read_csv(meta_path, parse_dates=["next_earnings"]) if meta_path.exists() \
         else pd.DataFrame()
-    if len(meta_df):
+    if len(meta_df) and "next_earnings" in meta_df.columns:
         meta_df["next_earnings"] = meta_df["next_earnings"].dt.date
-    meta = {r.ticker: dict(next_earnings=r.next_earnings)
+    meta = {r.ticker: dict(next_earnings=as_date(r.next_earnings))
             for r in meta_df.itertuples()} if len(meta_df) else {}
 
     est_rows, price_rows, meta_rows, all_new = [], [], [], []
     calls = 0
 
+    failed = []
     for tk in tickers.ticker:
+      # 每一檔各自包起來。踩過三次「一檔壞掉、八檔一起卡住」了 ——
+      # 單一標的的例外不該讓其他人的資料也更新不了。
+      try:
         p = plan(tk, master, meta, cfg, today)
         log(f"  {tk:<8} {p['mode']:<12} {p['why']}")
         if args.dry_run:
@@ -453,6 +480,7 @@ def main():
         est = merged_estimates(chain, tk)
         prices, _ = first_of(chain, "price_history", tk, None)
         px = float(prices.iloc[-1]) if prices is not None and len(prices) else np.nan
+        ner = as_date(ner)
         meta_rows.append(dict(ticker=tk, next_earnings=ner, checked=today))
         price_rows.append(dict(ticker=tk, price=px, price_date=today,
                                next_earnings=ner, as_of=today))
@@ -480,6 +508,15 @@ def main():
         all_new.append(rows)
         calls += len(used) + 2
         log(f"      財報={'+'.join(used)}  EPS={esrc}({basis})  {len(rows)} 列")
+      except Exception as e:
+        import traceback
+        failed.append(tk)
+        log(f"      ✗ {tk} 這一檔出錯，跳過（其他股票照常更新）：{e}")
+        traceback.print_exc()
+
+    if failed:
+        log(f"\n::warning::這幾檔這次沒更新到：{'、'.join(failed)}，"
+            f"其餘照常寫入。下一輪會自動再試一次。")
 
     if args.dry_run:
         log("\n(dry-run，未寫檔)")
